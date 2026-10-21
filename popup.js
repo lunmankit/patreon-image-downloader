@@ -22,6 +22,18 @@ chrome.storage.local.get(['autoLoad'], (result) => {
   }
 });
 
+// Reflect site-supported status on the toolbar icon when popup opens
+chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+  const tab = tabs && tabs[0];
+  if (!tab) return;
+  const supported = !!(tab.url && tab.url.includes('patreon.com'));
+  chrome.runtime.sendMessage({
+    type: 'SET_ICON_STATE',
+    state: supported ? 'supported' : 'default',
+    tabId: tab.id
+  });
+});
+
 // Persist size filter setting
 sizeFilter.addEventListener('input', () => {
   const minSize = parseInt(sizeFilter.value, 10);
@@ -154,6 +166,9 @@ downloadBtn.addEventListener('click', () => {
       if (downloadedCount === filteredImages.length) {
         statusEl.innerText = "所有圖片已成功下載！";
         downloadBtn.disabled = false;
+        try {
+          chrome.runtime.sendMessage({ type: 'DOWNLOAD_COMPLETE' });
+        } catch (e) {}
       }
     });
   });
