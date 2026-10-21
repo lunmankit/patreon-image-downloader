@@ -1,17 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Patreon Image Batch Downloader",
-  "version": "1.4",
+  "version": "1.4.1",
   "description": "Batch extract and download high-resolution images from Patreon posts.",
-  "browser_specific_settings": {
-    "gecko": {
-      "id": "patreon-image-downloader@lunmankit.github.io",
-      "strict_min_version": "140.0",
-      "data_collection_permissions": {
-        "required": ["none"]
-      }
-    }
-  },
   "permissions": [
     "activeTab",
     "scripting",
@@ -24,7 +15,6 @@
     "https://patreon.com/*"
   ],
   "background": {
-    "scripts": ["background.js"],
     "service_worker": "background.js"
   },
   "icons": {
@@ -37,7 +27,10 @@
     "default_title": "Patreon Image Batch Downloader",
     "default_icon": {
       "16": "icons/default16.png",
+      "24": "icons/default24.png",
+      "32": "icons/default32.png",
       "48": "icons/default48.png",
+      "64": "icons/default64.png",
       "128": "icons/default128.png"
     }
   }
