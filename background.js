@@ -1,19 +1,29 @@
 // Chrome MV3 runs this file as a service worker. Firefox MV3 runs it as an
 // event page (background.scripts). Both expose the chrome.* namespace below.
 const ICON_SETS = {
+  // Multiple densities so the browser auto-picks for ~480p (1x) through 4K HiDPI (about 2x-3x).
   default: {
     16: 'icons/default16.png',
+    24: 'icons/default24.png',
+    32: 'icons/default32.png',
     48: 'icons/default48.png',
+    64: 'icons/default64.png',
     128: 'icons/default128.png'
   },
   supported: {
     16: 'icons/supported16.png',
+    24: 'icons/supported24.png',
+    32: 'icons/supported32.png',
     48: 'icons/supported48.png',
+    64: 'icons/supported64.png',
     128: 'icons/supported128.png'
   },
   complete: {
     16: 'icons/complete16.png',
+    24: 'icons/complete24.png',
+    32: 'icons/complete32.png',
     48: 'icons/complete48.png',
+    64: 'icons/complete64.png',
     128: 'icons/complete128.png'
   }
 };
