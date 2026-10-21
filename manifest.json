@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Patreon Image Batch Downloader",
+  "version": "1.2",
+  "description": "Batch extract and download high-resolution images from Patreon posts.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*.patreon.com/*",
+    "https://patreon.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
