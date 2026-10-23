@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Patreon Image Batch Downloader",
-  "version": "1.5",
+  "version": "1.6",
   "description": "Batch extract and download high-resolution images from Patreon posts.",
   "browser_specific_settings": {
     "gecko": {
@@ -24,7 +24,6 @@
     "https://patreon.com/*"
   ],
   "background": {
-    "scripts": ["background.js"],
     "service_worker": "background.js"
   },
   "icons": {
