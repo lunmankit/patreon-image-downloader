@@ -1,12 +1,12 @@
 # Patreon Image Batch Downloader
 
-Manifest V3 extension (v1.5) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts.
+Manifest V3 extension (v1.6) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts.
 
 On a Patreon page, open the popup and scan. The extension collects post images (preferring original / download URLs), shows a preview, and can filter by minimum width or height. Optional auto-scroll loads more posts on feed pages before the scan. Downloads are saved under `Patreon_Downloads/`.
 
 The popup UI is in Traditional Chinese.
 
-Chrome and Firefox load this same folder. Chrome 121+ runs `background.js` as a service worker (`background.service_worker`). Firefox 140+ runs that same file as an event page (`background.scripts`). Firefox 140 is the first desktop release that accepts this manifest's `data_collection_permissions` entry, and it already includes the event-page loading behavior Firefox has had since version 121. Scripts call `chrome.*`, which Firefox implements for these APIs. Current Chrome leaves `browser_specific_settings` unused.
+Chrome loads this folder. `background.js` runs as a service worker (`background.service_worker` in `manifest.json`). Current Chrome reports `'background.scripts' requires manifest version of 2 or lower` when that key is present in Manifest V3, so `manifest.json` does not include it. Firefox does not run background service workers. It still runs `background.js` as an event page, but only from a staged copy: `tools/stage-firefox.py` writes `dist/firefox/` with `background.scripts` and no `service_worker`. Firefox temporary install always reads `manifest.json` from the selected add-on's directory, so the staged folder is a separate directory rather than a second file next to the Chrome manifest. Firefox 140 is the first desktop release that accepts `data_collection_permissions`, and it already includes the event-page behavior Firefox has had since version 121. Scripts call `chrome.*`, which Firefox implements for these APIs. Chrome leaves `browser_specific_settings` unused.
 
 ## Toolbar icon states
 
@@ -35,12 +35,13 @@ After code changes, open `chrome://extensions` and click **Reload** on this exte
 
 Firefox 140 or newer (desktop).
 
-1. Open `about:debugging`.
-2. In the left sidebar, click **This Firefox**.
-3. Click **Load Temporary Add-on…**.
-4. Select `manifest.json` in this folder.
+1. From this folder, run `python3 tools/stage-firefox.py` (on Windows, `py -3 tools/stage-firefox.py`).
+2. Open `about:debugging`.
+3. In the left sidebar, click **This Firefox**.
+4. Click **Load Temporary Add-on…**.
+5. Select `dist/firefox/manifest.json`.
 
-Firefox drops temporary add-ons when the browser closes, so load the add-on again after a restart. After code changes, open `about:debugging#/runtime/this-firefox` and click **Reload** next to this extension.
+Firefox drops temporary add-ons when the browser closes, so load the add-on again after a restart. After code changes, run `python3 tools/stage-firefox.py` again, then open `about:debugging#/runtime/this-firefox` and click **Reload** next to this extension.
 
 Packaging and signing for addons.mozilla.org is out of scope. The manifest already includes a Firefox extension id, `strict_min_version` of 140.0, and `data_collection_permissions` set to `none` (the auto-load preference stays in the browser, and downloads stay on this device). `gecko_android` is omitted, so this package is desktop Firefox only.
 

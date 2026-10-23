@@ -6,6 +6,7 @@ desktop.ini
 *.pem
 
 node_modules/
+dist/
 
 .env
 .env.*
