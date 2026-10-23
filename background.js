@@ -1,5 +1,6 @@
-// Chrome MV3 runs this file as a service worker. Firefox MV3 runs it as an
-// event page (background.scripts). Both expose the chrome.* namespace below.
+// Chrome MV3 loads this file from manifest.json as a service worker.
+// Firefox MV3 loads the same file from manifest.firefox.json as an event page
+// (background.scripts). Both expose the chrome.* namespace below.
 const ICON_SETS = {
   default: {
     16: 'icons/default16.png',
@@ -20,11 +21,13 @@ const ICON_SETS = {
 
 let completeResetTimer = null;
 
-function isPatreonUrl(url) {
+function isSupportedUrl(url) {
   if (!url) return false;
   try {
     const u = new URL(url);
-    return u.hostname === 'patreon.com' || u.hostname.endsWith('.patreon.com');
+    const host = u.hostname;
+    return host === 'patreon.com' || host.endsWith('.patreon.com')
+      || host === 'fantia.jp' || host.endsWith('.fantia.jp');
   } catch {
     return false;
   }
@@ -43,7 +46,7 @@ async function setIconState(state, tabId) {
 
 async function refreshTabIcon(tabId, url) {
   if (completeResetTimer) return; // keep complete state until it times out
-  await setIconState(isPatreonUrl(url) ? 'supported' : 'default', tabId);
+  await setIconState(isSupportedUrl(url) ? 'supported' : 'default', tabId);
 }
 
 chrome.runtime.onInstalled.addListener(() => {
