@@ -1,5 +1,6 @@
-// Chrome MV3 runs this file as a service worker. Firefox MV3 runs it as an
-// event page (background.scripts). Both expose the chrome.* namespace below.
+// Chrome loads this file as a service worker (manifest.json).
+// Firefox loads it as an event page (manifest.firefox.json).
+// Both expose the chrome.* namespace below.
 const ICON_SETS = {
   default: {
     16: 'icons/default16.png',
