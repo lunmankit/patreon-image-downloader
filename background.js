@@ -21,11 +21,13 @@ const ICON_SETS = {
 
 let completeResetTimer = null;
 
-function isPatreonUrl(url) {
+function isSupportedUrl(url) {
   if (!url) return false;
   try {
     const u = new URL(url);
-    return u.hostname === 'patreon.com' || u.hostname.endsWith('.patreon.com');
+    const host = u.hostname;
+    return host === 'patreon.com' || host.endsWith('.patreon.com')
+      || host === 'fantia.jp' || host.endsWith('.fantia.jp');
   } catch {
     return false;
   }
@@ -44,7 +46,7 @@ async function setIconState(state, tabId) {
 
 async function refreshTabIcon(tabId, url) {
   if (completeResetTimer) return; // keep complete state until it times out
-  await setIconState(isPatreonUrl(url) ? 'supported' : 'default', tabId);
+  await setIconState(isSupportedUrl(url) ? 'supported' : 'default', tabId);
 }
 
 chrome.runtime.onInstalled.addListener(() => {

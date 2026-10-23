@@ -1,6 +1,28 @@
 let allExtractedImages = [];
 let filteredImages = [];
 let timeoutTimer = null;
+let downloadFolder = 'Patreon_Downloads';
+
+function pageKind(url) {
+  if (!url) return '';
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname;
+    if (host === 'patreon.com' || host.endsWith('.patreon.com')) return 'patreon';
+    if (host === 'fantia.jp' || host.endsWith('.fantia.jp')) return 'fantia';
+  } catch (e) {}
+  return '';
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[ch]));
+}
 
 const scanBtn = document.getElementById('scan-btn');
 const downloadBtn = document.getElementById('download-btn');
@@ -26,7 +48,7 @@ chrome.storage.local.get(['autoLoad'], (result) => {
 chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
   const tab = tabs && tabs[0];
   if (!tab) return;
-  const supported = !!(tab.url && tab.url.includes('patreon.com'));
+  const supported = pageKind(tab.url) !== '';
   chrome.runtime.sendMessage({
     type: 'SET_ICON_STATE',
     state: supported ? 'supported' : 'default',
@@ -62,13 +84,22 @@ chrome.runtime.onMessage.addListener((msg) => {
       allExtractedImages = msg.result;
 
       if (allExtractedImages.length === 0) {
-        statusEl.innerText = "未找到貼文圖片。";
+        if (msg.lockedCount) {
+          statusEl.innerText = `未找到可下載的圖片。已略過 ${msg.lockedCount} 個尚未解鎖的付費區塊。請先登入 Fantia，且目前的方案必須看得到這些內容。`;
+        } else if (msg.notice) {
+          statusEl.innerText = msg.notice;
+        } else {
+          statusEl.innerText = "未找到貼文圖片。";
+        }
         previewContainer.style.display = 'none';
         downloadBtn.style.display = 'none';
         return;
       }
 
       applyFilterAndRender();
+      if (msg.lockedCount) {
+        statusEl.innerText += `（已略過 ${msg.lockedCount} 個未解鎖的付費區塊）`;
+      }
     } else {
       statusEl.innerText = "掃瞄失敗：解析圖片資料格式錯誤。";
     }
@@ -95,16 +126,20 @@ scanBtn.addEventListener('click', async () => {
       throw new Error("無法存取當前分頁。");
     }
 
-    if (!tab.url || (!tab.url.includes("patreon.com"))) {
-      throw new Error("請先開啟 Patreon 頁面再執行掃瞄。");
+    const kind = pageKind(tab.url);
+    if (!kind) {
+      throw new Error("請先開啟 Patreon 或 Fantia 頁面再執行掃瞄。");
     }
+    downloadFolder = kind === 'fantia' ? 'Fantia_Downloads' : 'Patreon_Downloads';
 
     await chrome.storage.local.set({ autoLoad: autoLoadCb.checked });
 
-    // Inject content.js script; content.js will send 'SCAN_COMPLETE' message when done
+    // Inject the scanner; content.js sends 'SCAN_COMPLETE' when done.
+    // Patreon keeps the original single-file injection.
+    const files = kind === 'fantia' ? ['fantia.js', 'content.js'] : ['content.js'];
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      files: ['content.js']
+      files: files
     });
   } catch (err) {
     if (timeoutTimer) clearTimeout(timeoutTimer);
@@ -138,10 +173,12 @@ function applyFilterAndRender() {
   filteredImages.forEach((img) => {
     const item = document.createElement('div');
     item.className = 'preview-item';
+    const safeUrl = escapeHtml(img.url);
+    const safeName = escapeHtml(img.filename);
     item.innerHTML = `
-      <img src="${img.url}" />
+      <img src="${safeUrl}" />
       <div class="preview-info">
-        <span class="preview-filename" title="${img.filename}">${img.filename}</span>
+        <span class="preview-filename" title="${safeName}">${safeName}</span>
         <span class="preview-size">${img.width > 0 ? `${img.width} ×${img.height} px` : '原圖 (未讀取解析度)'}</span>
       </div>
     `;
@@ -158,7 +195,7 @@ downloadBtn.addEventListener('click', () => {
   filteredImages.forEach((img) => {
     chrome.downloads.download({
       url: img.url,
-      filename: `Patreon_Downloads/${img.filename}`,
+      filename: `${downloadFolder}/${img.filename}`,
       conflictAction: 'uniquify'
     }, () => {
       downloadedCount++;

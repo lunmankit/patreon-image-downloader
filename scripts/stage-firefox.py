@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CHROME_MANIFEST = ROOT / "manifest.json"
 FIREFOX_MANIFEST = ROOT / "manifest.firefox.json"
 OUT = ROOT / "dist" / "firefox"
-FILES = ("background.js", "content.js", "popup.html", "popup.js")
+FILES = ("background.js", "content.js", "fantia.js", "popup.html", "popup.js")
 
 CHROME_BACKGROUND = {"service_worker": "background.js"}
 FIREFOX_BACKGROUND = {"scripts": ["background.js"]}

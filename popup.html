@@ -62,6 +62,12 @@
     .option-row input[type="checkbox"] {
       margin-right: 6px;
     }
+    .hint {
+      font-size: 11px;
+      color: #777;
+      margin: -4px 0 8px;
+      line-height: 1.4;
+    }
     #status {
       font-size: 12px;
       color: #666;
@@ -108,8 +114,9 @@
   </style>
 </head>
 <body>
-  <h3>Patreon 圖片批次下載器</h3>
-  
+  <h3>Patreon / Fantia 圖片批次下載器</h3>
+  <p class="hint">Fantia 付費內容只會下載已登入且看得到的圖片，不會嘗試解鎖未購買的內容。</p>
+
   <button id="scan-btn">掃瞄頁面圖片</button>
 
   <div class="filter-box">
@@ -121,7 +128,7 @@
 
     <div class="option-row">
       <input type="checkbox" id="auto-load-cb" checked>
-      <label for="auto-load-cb" style="font-weight:normal; margin:0;">自動滾動並載入所有貼文</label>
+      <label for="auto-load-cb" style="font-weight:normal; margin:0;">自動滾動或翻頁並載入所有貼文</label>
     </div>
   </div>
 
