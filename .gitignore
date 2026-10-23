@@ -5,6 +5,9 @@ desktop.ini
 *.crx
 *.pem
 
+# Firefox temporary add-on staged by scripts/stage-firefox.py
+dist/
+
 node_modules/
 
 .env
