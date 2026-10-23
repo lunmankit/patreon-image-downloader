@@ -1,6 +1,6 @@
 # Patreon Image Batch Downloader
 
-Manifest V3 extension (v1.4) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts.
+Manifest V3 extension (v1.5) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts.
 
 On a Patreon page, open the popup and scan. The extension collects post images (preferring original / download URLs), shows a preview, and can filter by minimum width or height. Optional auto-scroll loads more posts on feed pages before the scan. Downloads are saved under `Patreon_Downloads/`.
 
@@ -12,9 +12,11 @@ Chrome and Firefox load this same folder. Chrome 121+ runs `background.js` as a 
 
 The toolbar icon switches among three states in both browsers (`action.setIcon`):
 
-- **Idle** (`icons/default16.png`, `default48.png`, `default128.png`) — not on a Patreon page.
-- **Supported** (`icons/supported16.png`, `supported48.png`, `supported128.png`) — the active tab is a Patreon page.
-- **Complete** (`icons/complete16.png`, `complete48.png`, `complete128.png`) — a batch download just finished. The icon returns to idle or supported after a few seconds.
+- **Idle** (`icons/default16.png`, `default48.png`, `default128.png`) — not on a Patreon page (red download badge).
+- **Supported** (`icons/supported16.png`, `supported48.png`, `supported128.png`) — the active tab is a Patreon page (green check + red download badges).
+- **Complete** (`icons/complete16.png`, `complete48.png`, `complete128.png`) — a batch download just finished (green check badge). The icon returns to idle or supported after a few seconds.
+
+Status badges are drawn large with thick glyphs so they stay readable at the 16px toolbar size.
 
 `icons/icon128.png` is the same image as the idle 128px icon. `background.js` applies these states from tab changes and from popup messages (`SET_ICON_STATE`, `DOWNLOAD_COMPLETE`).
 
