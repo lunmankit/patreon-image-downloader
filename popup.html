@@ -62,6 +62,40 @@
     .option-row input[type="checkbox"] {
       margin-right: 6px;
     }
+    .filter-box label.stack {
+      display: block;
+      margin: 8px 0 0;
+    }
+    .folder-options select,
+    .folder-options input[type="text"] {
+      width: 100%;
+      box-sizing: border-box;
+      margin-top: 6px;
+      font-size: 12px;
+      padding: 4px 6px;
+    }
+    #folder-note,
+    #folder-warning {
+      font-size: 11px;
+      line-height: 1.4;
+      margin-top: 6px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    #folder-note {
+      color: #555;
+    }
+    #folder-warning {
+      color: #9d1c28;
+      font-weight: bold;
+    }
+    button.secondary {
+      background: #fff;
+      color: #9d1c28;
+      border: 1px solid #9d1c28;
+      padding: 6px;
+      font-size: 12px;
+    }
     .hint {
       font-size: 11px;
       color: #777;
@@ -130,12 +164,27 @@
       <input type="checkbox" id="auto-load-cb" checked>
       <label for="auto-load-cb" style="font-weight:normal; margin:0;">自動滾動或翻頁並載入所有貼文</label>
     </div>
+
+    <label class="stack" for="folder-mode">下載資料夾</label>
+    <div class="folder-options">
+      <select id="folder-mode">
+        <option value="off">不分子資料夾</option>
+        <option value="auto">個別資料夾：日期_標題</option>
+        <option value="custom">個別資料夾：自訂名稱</option>
+      </select>
+      <input type="text" id="custom-folder-name" placeholder="輸入資料夾名稱" autocomplete="off" style="display:none;">
+      <div id="folder-note"></div>
+      <div id="folder-warning"></div>
+      <button type="button" id="use-short-name-btn" class="secondary" style="display:none;">改用縮短名稱</button>
+    </div>
+    <p class="hint" style="margin:8px 0 0;">個別資料夾會放在 Patreon_Downloads 或 Fantia_Downloads 底下。自動命名是日期加標題，例如 20261026_Some Post Title。</p>
   </div>
 
   <div id="status">準備就緒</div>
   <button id="download-btn" style="display:none;">下載符合條件圖片 (<span id="count">0</span>)</button>
   <div id="preview-container"></div>
 
+  <script src="download-path.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

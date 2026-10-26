@@ -63,6 +63,19 @@
       return `${prefix}_${String(index).padStart(3, '0')}${ext}`;
     }
 
+    function imageRecord(url, filename, meta) {
+      const info = meta || {};
+      return {
+        url: url,
+        filename: filename,
+        width: 0,
+        height: 0,
+        postId: info.postId ? String(info.postId) : '',
+        postTitle: info.postTitle ? String(info.postTitle) : '',
+        postDate: info.postDate ? String(info.postDate) : ''
+      };
+    }
+
     // Helper to identify and filter out recommended/popular/sidebar post links
     function isUnwantedLink(a) {
       if (!a) return false;
@@ -118,13 +131,14 @@
       let authFailed = false;
       const pathname = location.pathname;
 
-      function absorb(collected) {
+      function absorb(collected, postId) {
         if (!collected) return;
         lockedCount += collected.lockedCount || 0;
         (collected.images || []).forEach((image) => {
           const key = scan.dedupeKey(image.url, location.origin);
           if (!key || seen.has(key)) return;
           seen.add(key);
+          if (postId && image && !image.postId) image.postId = String(postId);
           result.push(image);
         });
       }
@@ -191,7 +205,7 @@
       async function scanSinglePost(postId) {
         reportStatus('正在獲取 Fantia 貼文圖片...');
         const json = await fetchJson('/api/v1/posts/' + postId);
-        if (json && json.post) absorb(scan.collectFromPost(json.post, location.origin));
+        if (json && json.post) absorb(scan.collectFromPost(json.post, location.origin), postId);
       }
 
       async function scanBacknumbers() {
@@ -262,7 +276,7 @@
         let done = 0;
         await mapPool(postIds, 4, async (postId) => {
           const json = await fetchJson('/api/v1/posts/' + postId);
-          if (json && json.post) absorb(scan.collectFromPost(json.post, location.origin));
+          if (json && json.post) absorb(scan.collectFromPost(json.post, location.origin), postId);
           done += 1;
           if (done === postIds.length || done % 2 === 0) {
             reportStatus(`正在獲取 Fantia 貼文圖片（${done}/${postIds.length}）...`);
@@ -432,7 +446,10 @@
           if (!apiRes.ok) return;
           const json = await apiRes.json();
 
-          const postTitle = json.data?.attributes?.title || '';
+          const attributes = json.data?.attributes || {};
+          const postTitle = attributes.title || '';
+          const postDate = attributes.published_at || attributes.created_at || '';
+          const postMeta = { postId: postId, postTitle: postTitle, postDate: postDate };
           let mediaIndex = 1;
 
           if (Array.isArray(json.included)) {
@@ -449,12 +466,7 @@
                     const originalName = attrs.file_name || attrs.name;
                     const filename = extractFilename(fullResUrl, originalName, postTitle, mediaIndex);
 
-                    result.push({
-                      url: fullResUrl,
-                      filename: filename,
-                      width: 0,
-                      height: 0
-                    });
+                    result.push(imageRecord(fullResUrl, filename, postMeta));
                     mediaIndex++;
                   }
                 }
@@ -467,12 +479,7 @@
                     const originalName = attrs.file_name || attrs.name;
                     const filename = extractFilename(attrs.url, originalName, postTitle, mediaIndex);
 
-                    result.push({
-                      url: attrs.url,
-                      filename: filename,
-                      width: 0,
-                      height: 0
-                    });
+                    result.push(imageRecord(attrs.url, filename, postMeta));
                     mediaIndex++;
                   }
                 }
@@ -486,12 +493,7 @@
             if (!imagesSet.has(urlBasePath)) {
               imagesSet.add(urlBasePath);
               const filename = extractFilename(postFile.url, postFile.name, postTitle, mediaIndex);
-              result.push({
-                url: postFile.url,
-                filename: filename,
-                width: 0,
-                height: 0
-              });
+              result.push(imageRecord(postFile.url, filename, postMeta));
               mediaIndex++;
             }
           }
@@ -516,12 +518,7 @@
           if (!imagesSet.has(urlBasePath)) {
             imagesSet.add(urlBasePath);
             const filename = extractFilename(src, null, 'Patreon_Image', index);
-            result.push({
-              url: src,
-              filename: filename,
-              width: 0,
-              height: 0
-            });
+            result.push(imageRecord(src, filename, {}));
             index++;
           }
         }
