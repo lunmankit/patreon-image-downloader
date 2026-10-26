@@ -6,7 +6,11 @@ On a Patreon page, open the popup and scan. The extension collects post images (
 
 The popup UI is in Traditional Chinese.
 
-Chrome and Firefox load this same folder. Chrome 121+ runs `background.js` as a service worker (`background.service_worker`). Firefox 140+ runs that same file as an event page (`background.scripts`). Firefox 140 is the first desktop release that accepts this manifest's `data_collection_permissions` entry, and it already includes the event-page loading behavior Firefox has had since version 121. Scripts call `chrome.*`, which Firefox implements for these APIs. Current Chrome leaves `browser_specific_settings` unused.
+Chrome and Firefox need separate manifests. Chrome Manifest V3 loads `background.service_worker`. `background.scripts` is a Manifest V2 key, and Chrome reports `'background.scripts' requires manifest version of 2 or lower.` when that key is rejected. Firefox desktop release builds start `background.js` as an event page from `background.scripts` and do not support `background.service_worker` ([Firefox bug 1573659](https://bugzilla.mozilla.org/show_bug.cgi?id=1573659)).
+
+`manifest.json` is what Chrome loads. `manifest.firefox.json` is the same manifest with `background.scripts` instead of `background.service_worker`. Firefox's temporary add-on loader reads a file named `manifest.json`, so stage `dist/firefox` before loading there. Both browsers run the same `background.js`. Scripts call `chrome.*`, which Firefox implements for these APIs. Current Chrome leaves `browser_specific_settings` unused.
+
+Firefox 140 is the minimum desktop release because it is the first one that accepts this manifest's `data_collection_permissions` entry. Event pages have been available since Firefox 121.
 
 ## Toolbar icon states
 
@@ -29,20 +33,30 @@ Chrome 121 or newer.
 3. Click **Load unpacked**.
 4. Select this folder (the one that contains `manifest.json`).
 
+Load this folder (`background.service_worker`). `dist/firefox` is the Firefox package (`background.scripts` only); Chrome does not start a service worker from that folder.
+
 After code changes, open `chrome://extensions` and click **Reload** on this extension.
 
 ## Load a temporary add-on in Firefox
 
 Firefox 140 or newer (desktop).
 
+From the repo root, stage a folder whose manifest is named `manifest.json` and uses `background.scripts`:
+
+```bash
+python3 scripts/stage-firefox.py
+```
+
+The script checks that `manifest.json` and `manifest.firefox.json` match except for `background`, then writes `dist/firefox/` (`dist/` is gitignored).
+
 1. Open `about:debugging`.
 2. In the left sidebar, click **This Firefox**.
 3. Click **Load Temporary Add-on…**.
-4. Select `manifest.json` in this folder.
+4. Select `dist/firefox/manifest.json`.
 
-Firefox drops temporary add-ons when the browser closes, so load the add-on again after a restart. After code changes, open `about:debugging#/runtime/this-firefox` and click **Reload** next to this extension.
+Firefox drops temporary add-ons when the browser closes, so stage the folder if it is missing and load the add-on again after a restart. After code changes, run `python3 scripts/stage-firefox.py` again, then open `about:debugging#/runtime/this-firefox` and click **Reload** next to this extension. Reload reads the staged folder, so restage before Reload when sources or `manifest.firefox.json` change.
 
-Packaging and signing for addons.mozilla.org is out of scope. The manifest already includes a Firefox extension id, `strict_min_version` of 140.0, and `data_collection_permissions` set to `none` (the auto-load preference stays in the browser, and downloads stay on this device). `gecko_android` is omitted, so this package is desktop Firefox only.
+Packaging and signing for addons.mozilla.org is out of scope. `manifest.firefox.json` includes a Firefox extension id, `strict_min_version` of 140.0, and `data_collection_permissions` set to `none` (the auto-load preference stays in the browser, and downloads stay on this device). `gecko_android` is omitted, so this package is desktop Firefox only. Keep that gecko block in `manifest.json` as well so the two files stay aligned; the stage script refuses to run if anything other than `background` drifts.
 
 ## Permissions
 
