@@ -135,6 +135,8 @@ assert.ok(!urls.some((url) => url.includes('clip.mp4') || url.endsWith('/downloa
 assert.ok(urls.includes('https://fantia.jp/posts/1/download/99'));
 assert.strictEqual(collected.images.find((image) => image.url.endsWith('/download/99')).filename, 'art.png');
 assert.strictEqual(urls.length, 8);
+assert.ok(collected.images.every((image) => image.postTitle === 'Test Fantia Post'));
+assert.ok(collected.images.every((image) => image.postDate === ''));
 
 const blurred = FantiaScan.collectFromPost({
   title: 'Hidden',
@@ -197,9 +199,54 @@ delete chromeRest.background;
 delete firefoxRest.background;
 assert.deepStrictEqual(chromeRest, firefoxRest);
 
+const dated = FantiaScan.collectFromPost({
+  id: 42,
+  title: 'Hello:World',
+  posted_at: '2026-10-26T01:02:03+09:00',
+  post_contents: [{
+    visible_status: 'visible',
+    category: 'photo_gallery',
+    post_content_photos: [
+      { url: { original: 'https://cc.fantia.jp/uploads/post_content_photo/file/1/a.png' } }
+    ]
+  }]
+}, origin);
+assert.strictEqual(dated.images.length, 1);
+assert.strictEqual(dated.images[0].postId, '42');
+assert.strictEqual(dated.images[0].postTitle, 'Hello:World');
+assert.strictEqual(dated.images[0].postDate, '2026-10-26T01:02:03+09:00');
+
+const monthOnly = FantiaScan.collectFromPost({
+  id: 7,
+  title: 'August',
+  month: '202608',
+  post_contents: [{
+    visible_status: 'visible',
+    category: 'photo_gallery',
+    post_content_photos: [
+      { url: { original: 'https://cc.fantia.jp/uploads/post_content_photo/file/2/b.png' } }
+    ]
+  }]
+}, origin);
+assert.strictEqual(monthOnly.images[0].postDate, '202608');
+assert.strictEqual(monthOnly.images[0].postId, '7');
+
+const domImages = FantiaScan.collectFromImageUrls([
+  'https://cc.fantia.jp/uploads/post_content_photo/file/9/orig.png'
+], 'Album', origin);
+assert.strictEqual(domImages.images[0].postTitle, '');
+assert.strictEqual(domImages.images[0].postDate, '');
+assert.strictEqual(domImages.images[0].postId, '');
+
 const content = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
 assert.ok(content.includes("pathname.match(/\\/posts\\/.*?-?(\\d+)/)"));
 assert.ok(content.includes('scanFantiaPage'));
 assert.ok(content.includes("fetch(`/api/posts/${postId}?include=media,attachments,post_file`"));
+assert.ok(content.includes('published_at'));
+assert.ok(content.includes('postDate'));
+assert.ok(fs.readFileSync(path.join(root, 'fantia.js'), 'utf8').includes('posted_at'));
+assert.ok(fs.readFileSync(path.join(root, 'scripts/stage-firefox.py'), 'utf8').includes('download-path.js'));
+assert.strictEqual(chromeManifest.background.service_worker, 'background.js');
+assert.ok(!Object.prototype.hasOwnProperty.call(chromeManifest.background, 'scripts'));
 
 console.log('fantia scan tests passed');

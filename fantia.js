@@ -71,6 +71,21 @@
     return cleaned.length > 80 ? cleaned.slice(0, 80).trim() : cleaned;
   }
 
+  function fantiaPostId(post) {
+    if (!post || post.id == null || post.id === '') return '';
+    return String(post.id);
+  }
+
+  function fantiaPostDate(post) {
+    if (!post || typeof post !== 'object') return '';
+    const keys = ['posted_at', 'published_at', 'created_at', 'converted_at'];
+    for (let i = 0; i < keys.length; i++) {
+      if (post[keys[i]]) return String(post[keys[i]]);
+    }
+    if (post.month) return String(post.month);
+    return '';
+  }
+
   function fileNameFor(url, title, index, explicitName) {
     if (explicitName && IMAGE_EXT.test(explicitName)) return sanitizeFilename(explicitName);
     const prefix = clipName(title) || 'Fantia';
@@ -112,7 +127,10 @@
         url: full,
         filename: fileNameFor(full, title, index, explicitName),
         width: 0,
-        height: 0
+        height: 0,
+        postId: fantiaPostId(post),
+        postTitle: post && post.title ? String(post.title) : '',
+        postDate: fantiaPostDate(post)
       });
       index += 1;
     }
@@ -176,7 +194,10 @@
         url: full,
         filename: fileNameFor(full, title, index),
         width: 0,
-        height: 0
+        height: 0,
+        postId: '',
+        postTitle: '',
+        postDate: ''
       });
       index += 1;
     });

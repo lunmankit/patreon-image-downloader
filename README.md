@@ -1,8 +1,20 @@
 # Patreon & Fantia Image Batch Downloader
 
-Manifest V3 extension (v1.6) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts and from Fantia posts the current browser session can already see.
+Manifest V3 extension (v1.7) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts and from Fantia posts the current browser session can already see.
 
 On a supported page, open the popup and scan. The extension collects images (preferring original / download URLs), shows a preview, and can filter by minimum width or height. Optional auto-load scrolls Patreon feeds, and on Fantia it follows listing pagination, before the scan. Patreon downloads are saved under `Patreon_Downloads/`. Fantia downloads are saved under `Fantia_Downloads/`.
+
+## Per-post folders
+
+The popup field **下載資料夾** chooses where the batch goes. The choice and the last custom name are stored in extension storage.
+
+- **不分子資料夾** — files stay directly in `Patreon_Downloads/` or `Fantia_Downloads/` (the default).
+- **個別資料夾：日期_標題** — one folder per post, `Patreon_Downloads/20261026_Some Post Title/file.jpg` (Fantia uses `Fantia_Downloads/`). The date and title come from the post. A missing date uses today. A missing title uses the post id, or `untitled`. A month-only value uses that month's first day. The popup says when a fallback was used. Two posts that would share a name get the post id appended.
+- **個別資料夾：自訂名稱** — one folder name you type, under the same root, for the whole batch.
+
+Windows still limits the full path to about 260 characters (`MAX_PATH`), and `chrome.downloads` does not opt into long paths. This extension treats a relative path longer than **200 characters** as too long to save, leaving about 59 characters for the drive and the Downloads directory. The check runs while you edit a custom name and again when a date-plus-title folder is computed. Before a scan it estimates with a typical filename; after a scan it uses the real filenames.
+
+Auto mode shortens an over-long title and shows the shortened folder before download. A custom name that does not fit is not shortened silently: the popup warns **資料夾路徑超過 200 字元，無法儲存**, download stays disabled, and **改用縮短名稱** fills in a name that fits. Filenames that are still too long after the folder fits are shortened, with a separate warning, on both Patreon and Fantia.
 
 The popup UI is in Traditional Chinese.
 
@@ -59,7 +71,7 @@ From the repo root, stage a folder whose manifest is named `manifest.json` and u
 python3 scripts/stage-firefox.py
 ```
 
-The script checks that `manifest.json` and `manifest.firefox.json` match except for `background`, then writes `dist/firefox/` (`dist/` is gitignored), including `fantia.js`.
+The script checks that `manifest.json` and `manifest.firefox.json` match except for `background`, then writes `dist/firefox/` (`dist/` is gitignored), including `fantia.js` and `download-path.js`.
 
 1. Open `about:debugging`.
 2. In the left sidebar, click **This Firefox**.
@@ -77,7 +89,7 @@ Packaging and signing for addons.mozilla.org is out of scope. `manifest.firefox.
 | `activeTab` | Read the tab you invoke the extension on. |
 | `scripting` | Inject `content.js` (and `fantia.js` on Fantia) into that tab to scan the page. |
 | `downloads` | Save the selected images. |
-| `storage` | Remember the auto-load preference. |
+| `storage` | Remember auto-load, the folder naming mode, and the last custom folder name. |
 | `tabs` | Read the active tab URL so the toolbar icon can switch between idle and supported. |
 | `https://patreon.com/*`, `https://*.patreon.com/*` | Run on Patreon and request post media from the page. |
 | `https://fantia.jp/*`, `https://*.fantia.jp/*` | Run on Fantia, including `www`, and download images from `c.fantia.jp` and `cc.fantia.jp`. No other hosts are added. |
