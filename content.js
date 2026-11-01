@@ -756,8 +756,18 @@
         const urls = [];
         const images = card.querySelectorAll('img');
         for (let i = 0; i < images.length; i++) {
-          const src = images[i].currentSrc || images[i].getAttribute('src') || images[i].src || '';
-          if (src) urls.push(src);
+          const img = images[i];
+          const found = globalThis.PatreonMedia
+            ? PatreonMedia.urlsFromImageFields({
+              currentSrc: img.currentSrc,
+              src: img.getAttribute('src') || '',
+              dataSrc: img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || '',
+              dataOriginal: img.getAttribute('data-original') || '',
+              srcset: img.getAttribute('srcset') || '',
+              dataSrcset: img.getAttribute('data-srcset') || ''
+            })
+            : [];
+          for (let u = 0; u < found.length; u++) urls.push(found[u]);
         }
         seenCardImages = PatreonMedia.rememberImages(seenCardImages, cardPostId(card), urls);
       });
@@ -899,24 +909,40 @@
       await Promise.all(runners);
     }
 
-    async function fetchPostJson(postId) {
-      for (let attempt = 0; attempt < 2; attempt++) {
+    async function fetchJsonRetry(url, label) {
+      for (let attempt = 0; attempt < 4; attempt++) {
         try {
-          const apiRes = await fetch(`/api/posts/${postId}?include=media,attachments,post_file`, {
+          const apiRes = await fetch(url, {
             headers: { 'Accept': 'application/vnd.api+json' }
           });
-          if (apiRes.status === 429 || apiRes.status >= 500) {
-            await sleep(350 * (attempt + 1));
+          if (apiRes.status === 429 || apiRes.status === 408 || apiRes.status >= 500) {
+            await sleep(400 * (attempt + 1));
             continue;
           }
           if (!apiRes.ok) return null;
-          return await apiRes.json();
+          const json = await apiRes.json();
+          if (json && json.errors && !json.data) {
+            await sleep(400 * (attempt + 1));
+            continue;
+          }
+          return json;
         } catch (e) {
-          if (attempt === 1) console.warn(`Failed to fetch API for post ${postId}:`, e);
-          await sleep(300);
+          if (attempt === 3) console.warn(`Failed to fetch ${label}:`, e);
+          await sleep(400 * (attempt + 1));
         }
       }
       return null;
+    }
+
+    function fetchPostJson(postId) {
+      return fetchJsonRetry(
+        `/api/posts/${postId}?include=media,images,attachments,attachments_media,post_file`,
+        'post ' + postId
+      );
+    }
+
+    function fetchMediaJson(mediaId) {
+      return fetchJsonRetry('/api/media/' + mediaId, 'media ' + mediaId);
     }
 
     // -------------------------------------------------------------
@@ -928,14 +954,39 @@
       } else {
         reportStatus(`正在獲取 ${postIds.size} 篇貼文的高解析度媒體資料...`);
         const postIdArray = Array.from(postIds);
-        await mapPool(postIdArray, 4, async (postId) => {
+        let incompletePosts = 0;
+        await mapPool(postIdArray, 3, async (postId) => {
           const json = await fetchPostJson(postId);
-          if (!json) return;
+          if (!json) {
+            incompletePosts += 1;
+            return;
+          }
           if (!json.data) json.data = {};
           if (!json.data.id) json.data.id = postId;
+          const attributes = json.data.attributes || {};
           const found = PatreonMedia.collectPostImages(json);
+          const missing = PatreonMedia.mediaIdsToFetch(json, found);
+          for (let m = 0; m < missing.length; m++) {
+            const mediaJson = await fetchMediaJson(missing[m]);
+            const resource = mediaJson && (mediaJson.data || mediaJson);
+            if (!resource || !resource.attributes) continue;
+            const extra = PatreonMedia.collectPostImages({
+              data: {
+                id: postId,
+                attributes: {
+                  title: attributes.title || '',
+                  published_at: attributes.published_at || attributes.created_at || ''
+                }
+              },
+              included: [resource]
+            });
+            for (let e = 0; e < extra.length; e++) PatreonMedia.absorbInto(found, extra[e]);
+          }
           for (let i = 0; i < found.length; i++) pushCollected(found[i]);
         });
+        if (incompletePosts > 0) {
+          reportStatus(`有 ${incompletePosts} 篇貼文暫時無法取得完整圖片，已先保留目前找得到的照片。`);
+        }
       }
     }
 
@@ -963,9 +1014,18 @@
         const card = img.closest('[data-tag="post-card"]');
         const postId = card ? cardPostId(card) : '';
         if (isSinglePostPage && postId && postId !== singlePostId) return;
-        const src = img.currentSrc || img.getAttribute('src') || img.src || '';
-        if (!PatreonMedia.isPostImageUrl(src)) return;
-        pushCollected({ url: src, postId: postId });
+        const urls = PatreonMedia.urlsFromImageFields({
+          currentSrc: img.currentSrc,
+          src: img.getAttribute('src') || '',
+          dataSrc: img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || '',
+          dataOriginal: img.getAttribute('data-original') || '',
+          srcset: img.getAttribute('srcset') || '',
+          dataSrcset: img.getAttribute('data-srcset') || ''
+        });
+        for (let u = 0; u < urls.length; u++) {
+          if (!PatreonMedia.isPostImageUrl(urls[u])) continue;
+          pushCollected({ url: urls[u], postId: postId });
+        }
       });
     }
 
@@ -980,19 +1040,11 @@
         reportStatus(`正在校正圖片尺寸 (${Math.min(i + batchSize, result.length)}/${result.length})...`);
         await Promise.all(
           batch.map(async (item) => {
-            const dims = await fetchDimensions(item.url);
-            if (dims.width > 0 && dims.height > 0) {
-              const known = Math.max(item.width || 0, item.height || 0);
-              const measured = Math.max(dims.width, dims.height);
-              const fullFile = globalThis.PatreonMedia
-                && PatreonMedia.renditionRank(item.url) >= 90000;
-              // A full original can probe as a tiny stand-in. Keep the file's
-              // real size so the minimum-size filter does not drop it.
-              if (!(fullFile && known >= 400 && measured * 4 < known)) {
-                item.width = dims.width;
-                item.height = dims.height;
-              }
-            }
+            let dims = await fetchDimensions(item.url);
+            if (!(dims.width > 0 && dims.height > 0)) dims = await fetchDimensions(item.url);
+            const resolved = PatreonMedia.resolveDimensions(item, dims, item.url);
+            item.width = resolved.width;
+            item.height = resolved.height;
           })
         );
       }

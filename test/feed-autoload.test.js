@@ -265,7 +265,9 @@ assert.ok(!content.includes("txt.includes('show more')"));
 assert.ok(!content.includes("txt.includes('更多')"));
 assert.ok(content.includes('if (!isSinglePostPage && storageData && storageData.autoLoad)'));
 assert.ok(content.includes('scanFantiaPage'));
-assert.ok(content.includes('fetch(`/api/posts/${postId}?include=media,attachments,post_file`'));
+assert.ok(content.includes('include=media,images,attachments,attachments_media,post_file'));
+assert.ok(content.includes('resolveDimensions'));
+assert.ok(content.includes('mediaIdsToFetch'));
 
 const popup = fs.readFileSync(path.join(root, 'popup.js'), 'utf8');
 assert.ok(popup.includes("['feed-autoload.js', 'patreon-media.js', 'content.js']"));

@@ -171,6 +171,80 @@ assert.strictEqual(Media.passesMinSize({ width: 300, height: 200 }, 400), false)
 assert.strictEqual(Media.passesMinSize({ width: 100, height: 100 }, 400), false);
 assert.strictEqual(Media.passesMinSize({ width: 360, height: 800 }, 400), true);
 
+const fullUrl = original;
+const keptFull = Media.resolveDimensions({ width: 6720, height: 4480 }, { width: 12, height: 12 }, fullUrl);
+assert.strictEqual(keptFull.width, 6720);
+assert.strictEqual(keptFull.height, 4480);
+const ignoredProbe = Media.resolveDimensions({ width: 0, height: 0 }, { width: 20, height: 20 }, fullUrl);
+assert.strictEqual(ignoredProbe.width, 0);
+assert.strictEqual(ignoredProbe.height, 0);
+const thumbProbe = Media.resolveDimensions({ width: 0, height: 0 }, { width: 120, height: 80 }, tinyThumb);
+assert.strictEqual(thumbProbe.width, 120);
+assert.strictEqual(thumbProbe.height, 80);
+
+function cdnHash(hash, segment) {
+  return 'https://c10.patreonusercontent.com/4/patreon-media/p/post/50/'
+    + hash + '/' + segment + '/1.jpg?token-time=1';
+}
+const hashA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const hashB = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const thumbA = cdnHash(hashA, 'eyJ3IjoxMDB9');
+const betterA = cdnHash(hashA, 'eyJ3Ijo2MjB9');
+const fullB = cdnHash(hashB, 'eyJxIjoxMDAsIndlYnAiOjB9');
+const thumbOnly = {
+  data: {
+    id: '50',
+    attributes: {
+      title: 'Partial gallery',
+      published_at: '2026-04-04T00:00:00.000Z',
+      content_json_string: JSON.stringify({
+        type: 'doc',
+        content: [
+          { type: 'image', attrs: { media_id: '555', src: betterA, media_width: 3200, media_height: 2000 } },
+          { type: 'image', attrs: { media_id: '556', src: fullB, media_width: 4000, media_height: 3000 } }
+        ]
+      })
+    },
+    relationships: {
+      media: { data: [{ id: '555', type: 'media' }, { id: '556', type: 'media' }, { id: '900', type: 'media' }] }
+    }
+  },
+  included: [
+    {
+      type: 'media',
+      id: '555',
+      attributes: {
+        mimetype: 'image/jpeg',
+        image_urls: { thumbnail: thumbA },
+        metadata: { dimensions: { w: 3200, h: 2000 } }
+      }
+    },
+    {
+      type: 'media',
+      id: '900',
+      attributes: { mimetype: 'application/x-mpegURL', media_type: 'video' }
+    }
+  ]
+};
+const partial = Media.collectPostImages(thumbOnly);
+const byId = {};
+partial.forEach((image) => { byId[image.mediaId] = image; });
+assert.strictEqual(byId['555'].url, betterA);
+assert.strictEqual(byId['556'].url, fullB);
+const need = Media.mediaIdsToFetch(thumbOnly, partial);
+assert.ok(need.indexOf('555') !== -1);
+assert.ok(need.indexOf('556') === -1);
+assert.ok(need.indexOf('900') === -1);
+
+const fields = Media.urlsFromImageFields({
+  src: tinyThumb,
+  srcset: cardThumb + ' 620w, ' + original + ' 2000w',
+  dataSrc: 'https://c10.patreonusercontent.com/4/patreon-media/p/post/9/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/eyJ3IjoxMDB9/1.jpg'
+});
+assert.strictEqual(fields.length, 4);
+assert.strictEqual(fields[2], cardThumb);
+assert.strictEqual(fields[3], original);
+
 const popup = fs.readFileSync(path.join(root, 'popup.js'), 'utf8');
 assert.ok(popup.includes('PatreonMedia.passesMinSize'));
 const popupHtml = fs.readFileSync(path.join(root, 'popup.html'), 'utf8');
