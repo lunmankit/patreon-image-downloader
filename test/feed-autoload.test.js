@@ -60,16 +60,46 @@ assert.strictEqual(state.action, 'scroll');
 assert.strictEqual(state.reason, 'quiet');
 assert.strictEqual(state.done, false);
 state = Feed.decide(state, sample(['10', '11', '12', '13', '14'], { postCardCount: 5 }));
+assert.notStrictEqual(state.action, 'stop');
+assert.strictEqual(state.reason, 'quiet');
+
+// One Patreon response is about 20 posts. Two quiet rounds must not finish
+// the feed — that is what left Kit on the first page.
+const firstPage = [];
+for (let n = 1; n <= 20; n++) firstPage.push(String(n));
+state = Feed.notePosts(Feed.initialState(), firstPage, 20, 20);
+for (let i = 0; i < 2; i++) {
+  state = Feed.decide(state, sample(firstPage, { postCardCount: 20, rawPostLinks: 20 }));
+  assert.notStrictEqual(state.action, 'stop', 'first page quiet ' + i);
+}
+const secondPage = firstPage.concat(['21', '22', '23', '40', '60']);
+state = Feed.decide(state, sample(secondPage, { postCardCount: 25, rawPostLinks: 40 }));
+assert.strictEqual(state.reason, 'progress');
+assert.strictEqual(state.quietStreak, 0);
+assert.ok(state.seenIds.indexOf('60') !== -1);
+
+// More post links count even when the filtered id list has not caught up.
+state = Feed.notePosts(Feed.initialState(), firstPage, 20, 20);
+state = Feed.decide(state, sample(firstPage, { postCardCount: 20, rawPostLinks: 55 }));
+assert.strictEqual(state.reason, 'progress');
+assert.notStrictEqual(state.action, 'stop');
+
+state = Feed.notePosts(Feed.initialState(), firstPage, 20, 20);
+for (let i = 0; i < Feed.LIMITS.stablePassesToFinish - 1; i++) {
+  state = Feed.decide(state, sample(firstPage, { postCardCount: 20, rawPostLinks: 20 }));
+  assert.notStrictEqual(state.action, 'stop', 'quiet pass ' + i);
+}
+state = Feed.decide(state, sample(firstPage, { postCardCount: 20, rawPostLinks: 20 }));
 assert.strictEqual(state.action, 'stop');
 assert.strictEqual(state.reason, 'end-of-feed');
-assert.strictEqual(state.done, true);
 
 // Sidebar / recommendation links must not create progress. The caller passes
 // only the filtered id list, so a flat feed id list still reaches end-of-feed
 // even if a raw link count elsewhere would have moved.
-state = Feed.notePosts(Feed.initialState(), ['1', '2'], 2);
-state = Feed.decide(state, sample(['1', '2'], { postCardCount: 2 }));
-state = Feed.decide(state, sample(['1', '2'], { postCardCount: 2 }));
+state = Feed.notePosts(Feed.initialState(), ['1', '2'], 2, 2);
+for (let i = 0; i < Feed.LIMITS.stablePassesToFinish; i++) {
+  state = Feed.decide(state, sample(['1', '2'], { postCardCount: 2, rawPostLinks: 2 }));
+}
 assert.strictEqual(state.reason, 'end-of-feed');
 
 // Virtualized window: the visible count stays flat, but a new id is progress.
@@ -86,14 +116,20 @@ assert.strictEqual(state.reason, 'progress');
 assert.strictEqual(state.maxPostCards, 4);
 
 // "See more posts" / "查看更多文章" keep the feed open. In-post "Show more" does not.
-state = Feed.notePosts(Feed.initialState(), ['7'], 1);
-state = Feed.decide(state, sample(['7'], { hasLoadMore: true }));
+state = Feed.notePosts(Feed.initialState(), ['7'], 1, 1);
+state = Feed.decide(state, sample(['7'], { hasLoadMore: true, rawPostLinks: 1 }));
 assert.strictEqual(state.action, 'click');
 assert.strictEqual(state.reason, 'load-more');
 assert.strictEqual(state.done, false);
-for (let i = 0; i < 6; i++) {
-  state = Feed.decide(state, sample(['7'], { hasLoadMore: true }));
+for (let i = 0; i < Feed.LIMITS.maxLoadMoreClicksWithoutGrowth - 1; i++) {
+  state = Feed.decide(state, sample(['7'], { hasLoadMore: true, rawPostLinks: 1 }));
+  assert.strictEqual(state.action, 'click', 'load more click ' + i);
 }
+for (let i = 0; i < Feed.LIMITS.stablePassesToFinish - 1; i++) {
+  state = Feed.decide(state, sample(['7'], { hasLoadMore: true, rawPostLinks: 1 }));
+  assert.notStrictEqual(state.action, 'stop');
+}
+state = Feed.decide(state, sample(['7'], { hasLoadMore: true, rawPostLinks: 1 }));
 assert.strictEqual(state.action, 'stop');
 assert.strictEqual(state.reason, 'load-more-stuck');
 
@@ -121,12 +157,12 @@ state = Feed.decide(state, sample(['1', '2'], { busy: true, hasLoadMore: true })
 assert.strictEqual(state.action, 'stop');
 assert.strictEqual(state.reason, 'max-loops');
 
-assert.strictEqual(Feed.LIMITS.maxLoops, 100);
-assert.ok(Feed.LIMITS.stablePassesToFinish >= 2);
-assert.ok(Feed.LIMITS.minObserveMs >= 2500);
-assert.ok(Feed.LIMITS.quietMs >= 1000);
+assert.ok(Feed.LIMITS.maxLoops >= 100);
+assert.ok(Feed.LIMITS.stablePassesToFinish >= 6);
+assert.ok(Feed.LIMITS.stablePassesToFinish * Feed.LIMITS.minObserveMs >= 10000);
 assert.ok(Feed.LIMITS.maxSettleMs > Feed.LIMITS.minObserveMs);
-assert.ok(Feed.LIMITS.maxBusyPasses >= 4);
+assert.ok(Feed.LIMITS.maxBusyPasses >= 8);
+assert.ok(Feed.LIMITS.maxLoadMoreClicksWithoutGrowth >= 12);
 
 assert.strictEqual(Feed.postIdFromHref('/posts/my-title-98765'), '98765');
 assert.strictEqual(Feed.postIdFromHref('https://www.patreon.com/posts/98765'), '98765');
@@ -139,8 +175,12 @@ assert.strictEqual(Feed.isFeedLoadMoreLabel('查看更多文章'), true);
 assert.strictEqual(Feed.isFeedLoadMoreLabel('載入更多'), true);
 assert.strictEqual(Feed.isFeedLoadMoreLabel('加载更多'), true);
 assert.strictEqual(Feed.isFeedLoadMoreLabel('Show more'), false);
+assert.strictEqual(Feed.isFeedLoadMoreLabel('Show more', true), true);
 assert.strictEqual(Feed.isFeedLoadMoreLabel('See more'), false);
+assert.strictEqual(Feed.isFeedLoadMoreLabel('查看更多', true), true);
+assert.strictEqual(Feed.isFeedLoadMoreLabel('顯示更多', true), true);
 assert.strictEqual(Feed.isFeedLoadMoreLabel('更多'), false);
+assert.strictEqual(Feed.isFeedLoadMoreLabel('更多', true), false);
 assert.strictEqual(Feed.isFeedLoadMoreLabel('顯示更多'), false);
 assert.strictEqual(Feed.isFeedLoadMoreLabel('Load more comments'), false);
 assert.strictEqual(Feed.isFeedLoadMoreLabel('查看更多留言'), false);
@@ -178,6 +218,8 @@ assert.ok(content.includes('quietMs'));
 assert.ok(content.includes('maxSettleMs'));
 assert.ok(content.includes('isLoadingSignal'));
 assert.ok(content.includes('isFeedLoadMoreLabel'));
+assert.ok(content.includes('window.scrollTo'));
+assert.ok(content.includes('rememberedFeedIds'));
 assert.ok(content.includes('[data-tag="post-card"]'));
 assert.ok(content.includes('isUnwantedLink'));
 assert.ok(!content.includes('noChangeCount'));

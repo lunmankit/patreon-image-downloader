@@ -358,11 +358,9 @@
     // -------------------------------------------------------------
     // Step 0: Auto-Load ALL Posts (Feed / creator pages only)
     // -------------------------------------------------------------
-    // End the feed only after the DOM has settled, the loading indicator
-    // below the last post card is gone, and no real load-more control
-    // remains. Counting every a[href*="/posts/"] (sidebar, recommendations,
-    // repeated links) and waiting 800ms after a smooth scroll stopped the
-    // scan while "loading more posts" was still on screen.
+    // Patreon returns about 20 posts per page. Keep stepping the window to
+    // the bottom and clicking the tail control until several passes add no
+    // posts. One jump plus two quiet rounds stopped on the first page.
     function sleep(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
@@ -374,10 +372,19 @@
       return el.getAttribute('class') || '';
     }
 
+    function isPageChrome(el) {
+      return !!(el && el.closest && el.closest('header, nav, aside'));
+    }
+
     function isIgnoredRegion(el) {
       if (!el || !el.closest) return false;
-      if (el.closest('header, nav, aside')) return true;
+      if (isPageChrome(el)) return true;
       return isUnwantedLink(el);
+    }
+
+    function followsElement(anchor, el) {
+      if (!anchor || !el || !anchor.compareDocumentPosition) return true;
+      return (anchor.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
     }
 
     function isVisible(el) {
@@ -430,7 +437,7 @@
     function activatableControl(el) {
       if (!el || !el.closest) return null;
       const target = el.closest('button, [role="button"], a');
-      if (!target || isIgnoredRegion(target)) return null;
+      if (!target || isPageChrome(target)) return null;
       if (target.closest('[data-tag="post-card"]')) return null;
       if (target.disabled || target.getAttribute('aria-disabled') === 'true') return null;
       if (String(target.tagName).toUpperCase() === 'A') {
@@ -441,10 +448,21 @@
       return target;
     }
 
+    function countRawPostLinks() {
+      const Feed = globalThis.FeedAutoLoad;
+      let count = 0;
+      const anchors = document.querySelectorAll('a[href*="/posts/"]');
+      for (let i = 0; i < anchors.length; i++) {
+        if (isPageChrome(anchors[i])) continue;
+        if (Feed.postIdFromHref(anchors[i].getAttribute('href'))) count += 1;
+      }
+      return count;
+    }
+
     function scanFeedTail() {
       const Feed = globalThis.FeedAutoLoad;
       const cards = feedPostCards();
-      const lastCard = cards.length ? cards[cards.length - 1] : null;
+      const firstCard = cards.length ? cards[0] : null;
       const selector = [
         'button',
         '[role="button"]',
@@ -457,12 +475,14 @@
       ].join(', ');
       const candidates = document.querySelectorAll(selector);
       let busy = false;
-      let loadMoreEl = null;
+      let hasStrongLoadMore = false;
+      const loadMoreEls = [];
+      const seenControls = new Set();
       for (let i = 0; i < candidates.length; i++) {
         const el = candidates[i];
         if (el.closest('[data-tag="post-card"]')) continue;
-        if (isIgnoredRegion(el)) continue;
-        if (lastCard && (lastCard.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) === 0) continue;
+        if (isPageChrome(el)) continue;
+        if (firstCard && !followsElement(firstCard, el)) continue;
         if (!isVisible(el)) continue;
         const info = {
           ariaLabel: el.getAttribute('aria-label') || '',
@@ -474,19 +494,35 @@
         };
         if (Feed.isLoadingSignal(info)) busy = true;
         const clickable = activatableControl(el);
-        if (!clickable) continue;
+        if (!clickable || seenControls.has(clickable)) continue;
+        if (firstCard && !followsElement(firstCard, clickable)) continue;
         const label = (clickable.getAttribute('aria-label') || '') + ' ' + (clickable.innerText || clickable.textContent || '');
         const dataTag = (clickable.getAttribute('data-tag') || '') + ' ' + info.dataTag;
-        if (Feed.isFeedLoadMoreLabel(label) || Feed.isLoadMoreDataTag(dataTag)) {
-          loadMoreEl = clickable;
+        const tailLabel = Feed.isFeedLoadMoreLabel(label, true) || Feed.isLoadMoreDataTag(dataTag);
+        if (!tailLabel) continue;
+        seenControls.add(clickable);
+        loadMoreEls.push(clickable);
+        if (Feed.isFeedLoadMoreLabel(label, false) || Feed.isLoadMoreDataTag(dataTag)) {
+          hasStrongLoadMore = true;
         }
       }
       return {
         busy: busy,
-        hasLoadMore: !!loadMoreEl,
-        loadMoreEl: loadMoreEl,
-        postCardCount: cards.length
+        hasLoadMore: hasStrongLoadMore,
+        loadMoreEl: loadMoreEls.length ? loadMoreEls[loadMoreEls.length - 1] : null,
+        loadMoreEls: loadMoreEls,
+        postCardCount: cards.length,
+        rawPostLinks: countRawPostLinks()
       };
+    }
+
+    function clickTailLoadMore() {
+      const tail = scanFeedTail();
+      const els = tail.loadMoreEls || [];
+      for (let i = 0; i < els.length; i++) {
+        try { els[i].click(); } catch (e) {}
+      }
+      return tail;
     }
 
     function feedMutationMatters(record) {
@@ -502,30 +538,87 @@
       return added + removed > 0;
     }
 
-    function jumpScroll(node, top) {
-      if (!node) return;
-      try {
-        node.scrollTop = top;
-      } catch (e) {}
+    function pageScrollHeight() {
+      const bodyHeight = document.body ? document.body.scrollHeight : 0;
+      const rootHeight = document.documentElement ? document.documentElement.scrollHeight : 0;
+      const scrolling = document.scrollingElement ? document.scrollingElement.scrollHeight : 0;
+      return Math.max(bodyHeight, rootHeight, scrolling, 0);
+    }
+
+    function scrollWindowTo(top) {
+      const scrollingElement = document.scrollingElement || document.documentElement;
+      try { scrollingElement.scrollTop = top; } catch (e) {}
+      if (document.body && document.body !== scrollingElement) {
+        try { document.body.scrollTop = top; } catch (e) {}
+      }
+      try { window.scrollTo(0, top); } catch (e) {}
+      try { window.dispatchEvent(new Event('scroll')); } catch (e) {}
+    }
+
+    function findScrollableContainers() {
+      const nodes = [];
+      const root = document.body;
+      if (!root || !root.querySelectorAll) return nodes;
+      const all = root.querySelectorAll('main, section, div');
+      for (let i = 0; i < all.length && nodes.length < 6; i++) {
+        const el = all[i];
+        if (el.scrollHeight < el.clientHeight + 160) continue;
+        let overflowY = '';
+        try { overflowY = window.getComputedStyle(el).overflowY; } catch (e) { continue; }
+        if (overflowY !== 'auto' && overflowY !== 'scroll' && overflowY !== 'overlay') continue;
+        nodes.push(el);
+      }
+      return nodes;
+    }
+
+    function scrollContainersBy(nodes, distance) {
+      for (let i = 0; i < nodes.length; i++) {
+        const el = nodes[i];
+        try {
+          const max = Math.max(0, el.scrollHeight - el.clientHeight);
+          el.scrollTop = Math.min(max, el.scrollTop + distance);
+        } catch (e) {}
+      }
+    }
+
+    function pinContainers(nodes) {
+      for (let i = 0; i < nodes.length; i++) {
+        try { nodes[i].scrollTop = nodes[i].scrollHeight; } catch (e) {}
+      }
     }
 
     async function scrollFeedToEnd() {
-      const scrollingElement = document.scrollingElement || document.documentElement;
       const view = window.innerHeight || 800;
-      const height = scrollingElement.scrollHeight || (document.body ? document.body.scrollHeight : 0) || 0;
-      jumpScroll(scrollingElement, Math.max(0, height - view - 320));
+      const step = Math.max(320, Math.floor(view * 0.85));
+      const scrollers = findScrollableContainers();
       const cards = feedPostCards();
-      let node = cards.length ? cards[cards.length - 1] : document.querySelector('main');
-      while (node) {
-        if (node.scrollHeight > node.clientHeight + 32) jumpScroll(node, node.scrollHeight);
-        node = node.parentElement;
+      const anchor = cards.length ? cards[cards.length - 1] : document.querySelector('main');
+      if (anchor && anchor.scrollIntoView) {
+        try {
+          anchor.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'instant' });
+        } catch (e) {}
       }
+      // Already at the bottom: step back up so the next-page sentinel can enter again.
+      const maxTop = Math.max(0, pageScrollHeight() - view);
+      const here = window.scrollY || 0;
+      if (maxTop - here < 80) {
+        scrollWindowTo(Math.max(0, maxTop - Math.min(view, 1000)));
+        scrollContainersBy(scrollers, -Math.min(view, 1000));
+        await sleep(140);
+      }
+      for (let i = 0; i < 36; i++) {
+        const top = window.scrollY || 0;
+        const dest = Math.max(0, pageScrollHeight() - view);
+        if (top >= dest - 8) break;
+        scrollWindowTo(Math.min(dest, top + step));
+        scrollContainersBy(scrollers, step);
+        await sleep(90);
+      }
+      scrollWindowTo(pageScrollHeight());
+      pinContainers(scrollers);
       await sleep(80);
-      const latest = document.scrollingElement || document.documentElement;
-      jumpScroll(latest, latest.scrollHeight || height);
-      await sleep(80);
-      const again = document.scrollingElement || document.documentElement;
-      jumpScroll(again, again.scrollHeight || height);
+      scrollWindowTo(pageScrollHeight());
+      pinContainers(scrollers);
     }
 
     function watchFeedResources() {
@@ -558,7 +651,9 @@
       const limits = Feed.LIMITS;
       const baselineIds = new Set(collectFeedPostIds());
       const baselineCards = feedPostCards().length;
+      const baselineRaw = countRawPostLinks();
       let lastActivity = Date.now();
+      let lastPin = Date.now();
       let resourceStamp = net.stamp;
       const started = Date.now();
       const observer = new MutationObserver((records) => {
@@ -582,7 +677,8 @@
           }
           latest = scanFeedTail();
           const ids = collectFeedPostIds();
-          let grewDuringWait = latest.postCardCount > baselineCards;
+          const rawNow = countRawPostLinks();
+          let grewDuringWait = latest.postCardCount > baselineCards || rawNow > baselineRaw;
           if (!grewDuringWait) {
             for (let i = 0; i < ids.length; i++) {
               if (!baselineIds.has(ids[i])) {
@@ -593,6 +689,13 @@
           }
           const elapsed = Date.now() - started;
           const quietFor = Date.now() - lastActivity;
+          if (Date.now() - lastPin >= 700) {
+            lastPin = Date.now();
+            scrollWindowTo(pageScrollHeight());
+            if (latest.loadMoreEl) {
+              try { latest.loadMoreEl.click(); } catch (e) {}
+            }
+          }
           if (latest.busy) announce(true);
           if (elapsed >= limits.maxSettleMs) break;
           if (latest.busy) continue;
@@ -608,6 +711,7 @@
       return {
         postIds: collectFeedPostIds(),
         postCardCount: latest.postCardCount,
+        rawPostLinks: countRawPostLinks(),
         hasLoadMore: latest.hasLoadMore,
         busy: !!(latest.busy || quietFor < limits.quietMs)
       };
@@ -617,7 +721,12 @@
       const Feed = globalThis.FeedAutoLoad;
       const limits = Feed.LIMITS;
       const net = watchFeedResources();
-      let state = Feed.notePosts(Feed.initialState(), collectFeedPostIds(), feedPostCards().length);
+      let state = Feed.notePosts(
+        Feed.initialState(),
+        collectFeedPostIds(),
+        feedPostCards().length,
+        countRawPostLinks()
+      );
       let lastReportAt = 0;
       let lastReportText = '';
 
@@ -640,10 +749,7 @@
         while (!state.done && state.loops < limits.maxLoops) {
           announce(false);
           await scrollFeedToEnd();
-          if (state.action === 'click') {
-            const control = scanFeedTail().loadMoreEl;
-            if (control) control.click();
-          }
+          clickTailLoadMore();
           const observation = await waitForFeedSettle(net, announce);
           state = Feed.decide(state, observation);
         }
@@ -657,15 +763,17 @@
       } else {
         reportStatus(`貼文已全部展開 (共 ${count} 篇)`);
       }
+      return state.seenIds || [];
     }
 
+    let rememberedFeedIds = [];
     const storageData = await new Promise(resolve => chrome.storage.local.get(['autoLoad'], resolve));
     if (!isSinglePostPage && storageData && storageData.autoLoad) {
       if (!globalThis.FeedAutoLoad) {
         reportStatus('自動展開元件未載入，改為掃瞄目前畫面上的貼文。');
       } else {
         try {
-          await autoLoadAllPosts();
+          rememberedFeedIds = await autoLoadAllPosts() || [];
         } catch (e) {
           console.warn('Auto-load failed:', e);
           reportStatus('自動展開中斷，改為掃瞄目前畫面上的貼文...');
@@ -698,6 +806,11 @@
         if (isUnwantedLink(el)) return;
         const id = el.getAttribute('data-post-id');
         if (id) postIds.add(id);
+      });
+
+      // Ids seen while paging, including ones a virtualized list has since unmounted.
+      rememberedFeedIds.forEach((id) => {
+        if (id) postIds.add(String(id));
       });
     }
 

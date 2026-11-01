@@ -1,19 +1,20 @@
 // Pure decisions for Patreon feed / creator auto-load.
 // Injected before content.js on Patreon. Fantia does not use this.
 //
-// The feed is done only after quiet, settled passes with no new post ids,
-// no post cards, no loading indicator, and no real "load more" control.
+// Patreon serves about 20 posts per page. Stopping after two quiet rounds
+// left the scan on that first page. Keep scrolling and clicking until several
+// passes in a row add nothing, with no loader and no load-more control.
 // A visible loader is "still loading", not the end of the feed.
 (function (root) {
   const LIMITS = {
-    maxLoops: 100,
-    stablePassesToFinish: 2,
-    stablePassesWhenEmpty: 4,
-    maxBusyPasses: 8,
-    maxLoadMoreClicksWithoutGrowth: 4,
-    quietMs: 1200,
-    minObserveMs: 3200,
-    maxSettleMs: 6000
+    maxLoops: 160,
+    stablePassesToFinish: 8,
+    stablePassesWhenEmpty: 6,
+    maxBusyPasses: 12,
+    maxLoadMoreClicksWithoutGrowth: 24,
+    quietMs: 700,
+    minObserveMs: 1600,
+    maxSettleMs: 5000
   };
 
   const LOAD_MORE_PHRASES = [
@@ -50,15 +51,21 @@
     return match && match[1] ? match[1] : '';
   }
 
-  function isFeedLoadMoreLabel(text) {
+  function isFeedLoadMoreLabel(text, inTail) {
     const normalized = normalizeLabel(text);
-    if (!normalized || normalized.length > 48) return false;
-    if (/comment|reply|留言|評論|评论|回覆|返信/.test(normalized)) return false;
+    if (!normalized || normalized.length > 64) return false;
+    if (/comment|reply|留言|評論|评论|回覆|返信|option|選項|選單|菜单/.test(normalized)) return false;
     for (let i = 0; i < LOAD_MORE_PHRASES.length; i++) {
       const phrase = LOAD_MORE_PHRASES[i].toLowerCase();
       if (normalized === phrase) return true;
-      if (normalized.startsWith(phrase) && normalized.length <= phrase.length + 8) return true;
+      if (normalized.indexOf(phrase) !== -1 && normalized.length <= 40) return true;
     }
+    // Short labels that only mean "expand this post" when they sit inside a
+    // card. In the feed tail they are the pagination control Patreon shows
+    // ("Show more" / "查看更多"), which the strict list used to skip.
+    if (!inTail) return false;
+    if (/^(see more|show more|view more|read more|顯示更多|查看更多|看更多)$/.test(normalized)) return true;
+    if (normalized.length <= 24 && (normalized.indexOf('查看更多') !== -1 || normalized.indexOf('顯示更多') !== -1 || normalized.indexOf('看更多') !== -1)) return true;
     return false;
   }
 
@@ -95,6 +102,7 @@
       seenIds: [],
       maxPostCards: 0,
       lastPostId: '',
+      maxRawLinks: 0,
       quietStreak: 0,
       busyPasses: 0,
       loadMoreClicks: 0,
@@ -105,7 +113,7 @@
     };
   }
 
-  function notePosts(state, postIds, postCardCount) {
+  function notePosts(state, postIds, postCardCount, rawPostLinks) {
     const base = state || initialState();
     const seen = new Set(base.seenIds || []);
     const ids = postIds || [];
@@ -121,6 +129,7 @@
       seenIds: Array.from(seen),
       maxPostCards: Math.max(base.maxPostCards || 0, postCardCount || 0),
       lastPostId: lastPostId,
+      maxRawLinks: Math.max(base.maxRawLinks || 0, rawPostLinks || 0),
       quietStreak: base.quietStreak || 0,
       busyPasses: base.busyPasses || 0,
       loadMoreClicks: base.loadMoreClicks || 0,
@@ -139,7 +148,7 @@
     return Math.max(postCardCount || 0, state && state.maxPostCards ? state.maxPostCards : 0);
   }
 
-  function absorb(state, postIds, postCardCount) {
+  function absorb(state, postIds, postCardCount, rawPostLinks) {
     const seen = new Set(state.seenIds || []);
     const ids = [];
     let idGrew = false;
@@ -155,11 +164,14 @@
     }
     const postCards = postCardCount || 0;
     const cardGrew = postCards > (state.maxPostCards || 0);
+    const raw = rawPostLinks || 0;
+    const rawGrew = raw > (state.maxRawLinks || 0);
     return {
       seenIds: Array.from(seen),
       maxPostCards: Math.max(state.maxPostCards || 0, postCards),
+      maxRawLinks: Math.max(state.maxRawLinks || 0, raw),
       lastPostId: ids.length ? ids[ids.length - 1] : (state.lastPostId || ''),
-      progress: idGrew || cardGrew
+      progress: idGrew || cardGrew || rawGrew
     };
   }
 
@@ -172,6 +184,7 @@
         seenIds: current.seenIds || [],
         maxPostCards: current.maxPostCards || 0,
         lastPostId: current.lastPostId || '',
+        maxRawLinks: current.maxRawLinks || 0,
         quietStreak: current.quietStreak || 0,
         busyPasses: current.busyPasses || 0,
         loadMoreClicks: current.loadMoreClicks || 0,
@@ -182,7 +195,7 @@
       };
     }
 
-    const absorbed = absorb(current, obs.postIds, obs.postCardCount);
+    const absorbed = absorb(current, obs.postIds, obs.postCardCount, obs.rawPostLinks);
     const progress = absorbed.progress;
     const busy = !!obs.busy;
     const loops = (current.loops || 0) + 1;
@@ -232,6 +245,7 @@
       seenIds: absorbed.seenIds,
       maxPostCards: absorbed.maxPostCards,
       lastPostId: absorbed.lastPostId,
+      maxRawLinks: absorbed.maxRawLinks,
       quietStreak: quietStreak,
       busyPasses: busyPasses,
       loadMoreClicks: loadMoreClicks,
