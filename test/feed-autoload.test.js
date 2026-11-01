@@ -168,6 +168,40 @@ assert.strictEqual(Feed.postIdFromHref('/posts/my-title-98765'), '98765');
 assert.strictEqual(Feed.postIdFromHref('https://www.patreon.com/posts/98765'), '98765');
 assert.strictEqual(Feed.postIdFromHref('/posts/new'), '');
 assert.strictEqual(Feed.postIdFromHref(''), '');
+assert.strictEqual(Feed.postIdFromHref('/posts/2024-update-98765'), '98765');
+assert.strictEqual(Feed.postIdFromHref('/patreon/posts/one-roll-to-rule-170723691'), '170723691');
+assert.strictEqual(Feed.postIdFromHref('/cw/patreon/posts'), '');
+assert.strictEqual(Feed.postIdFromHref('/posts/hello?ref=2024'), '');
+
+assert.strictEqual(Feed.isRecommendationHeading('See more posts'), false);
+assert.strictEqual(Feed.isRecommendationHeading('Unlock more posts like this one'), false);
+assert.strictEqual(Feed.isRecommendationHeading('Load more posts'), false);
+assert.strictEqual(Feed.isRecommendationHeading('Popular posts'), true);
+assert.strictEqual(Feed.isRecommendationHeading('More posts by this creator'), true);
+assert.strictEqual(Feed.isRecommendationHeading('You might like'), true);
+assert.strictEqual(Feed.isRecommendationHeading(''), false);
+
+function chromeEl(flags, parent) {
+  return {
+    parent: parent || null,
+    flags: flags,
+    closest(sel) {
+      let cur = this;
+      while (cur) {
+        if (cur.flags && cur.flags[sel]) return cur;
+        cur = cur.parent;
+      }
+      return null;
+    }
+  };
+}
+const postCard = chromeEl({ '[data-tag="post-card"]': true });
+const cardHeader = chromeEl({ 'header, nav, aside': true }, postCard);
+const titleLink = chromeEl({}, cardHeader);
+assert.strictEqual(Feed.isSiteChrome(titleLink), false);
+const siteHeader = chromeEl({ 'header, nav, aside': true });
+assert.strictEqual(Feed.isSiteChrome(chromeEl({}, siteHeader)), true);
+assert.strictEqual(Feed.isSiteChrome(chromeEl({})), false);
 
 assert.strictEqual(Feed.isFeedLoadMoreLabel('See more posts'), true);
 assert.strictEqual(Feed.isFeedLoadMoreLabel('Load more'), true);
@@ -220,6 +254,9 @@ assert.ok(content.includes('isLoadingSignal'));
 assert.ok(content.includes('isFeedLoadMoreLabel'));
 assert.ok(content.includes('window.scrollTo'));
 assert.ok(content.includes('rememberedFeedIds'));
+assert.ok(content.includes('rememberVisiblePostImages'));
+assert.ok(content.includes('PatreonMedia.collectPostImages'));
+assert.ok(content.includes('isSiteChrome'));
 assert.ok(content.includes('[data-tag="post-card"]'));
 assert.ok(content.includes('isUnwantedLink'));
 assert.ok(!content.includes('noChangeCount'));
@@ -231,11 +268,12 @@ assert.ok(content.includes('scanFantiaPage'));
 assert.ok(content.includes('fetch(`/api/posts/${postId}?include=media,attachments,post_file`'));
 
 const popup = fs.readFileSync(path.join(root, 'popup.js'), 'utf8');
-assert.ok(popup.includes("['feed-autoload.js', 'content.js']"));
+assert.ok(popup.includes("['feed-autoload.js', 'patreon-media.js', 'content.js']"));
 assert.ok(popup.includes("['fantia.js', 'content.js']"));
 
 const stage = fs.readFileSync(path.join(root, 'scripts/stage-firefox.py'), 'utf8');
 assert.ok(stage.includes('feed-autoload.js'));
+assert.ok(stage.includes('patreon-media.js'));
 
 assert.strictEqual(Feed.foundCount(Feed.notePosts(Feed.initialState(), ['a', 'b'], 2), ['a'], 1), 2);
 assert.strictEqual(Feed.foundCount(Feed.initialState(), [], 3), 3);

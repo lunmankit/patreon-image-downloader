@@ -223,7 +223,7 @@ scanBtn.addEventListener('click', async () => {
 
     // Inject the scanner; content.js sends 'SCAN_COMPLETE' when done.
     // feed-autoload.js decides when a Patreon feed has actually finished.
-    const files = kind === 'fantia' ? ['fantia.js', 'content.js'] : ['feed-autoload.js', 'content.js'];
+    const files = kind === 'fantia' ? ['fantia.js', 'content.js'] : ['feed-autoload.js', 'patreon-media.js', 'content.js'];
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: files
@@ -241,9 +241,12 @@ function applyFilterAndRender() {
 
   const minSize = parseInt(sizeFilter.value, 10);
 
-  filteredImages = allExtractedImages.filter(img => 
-    (img.width === 0 && img.height === 0) || img.width >= minSize || img.height >= minSize
-  );
+  filteredImages = allExtractedImages.filter((img) => {
+    if (globalThis.PatreonMedia && typeof PatreonMedia.passesMinSize === 'function') {
+      return PatreonMedia.passesMinSize(img, minSize);
+    }
+    return (img.width === 0 && img.height === 0) || img.width >= minSize || img.height >= minSize;
+  });
 
   statusEl.innerText = `找到 ${allExtractedImages.length} 張，篩選後剩餘 ${filteredImages.length} 張`;
   countEl.innerText = filteredImages.length;

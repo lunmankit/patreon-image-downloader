@@ -46,9 +46,49 @@
 
   function postIdFromHref(href) {
     if (!href) return '';
-    const value = String(href);
-    const match = value.match(/\/posts\/.*?-?(\d+)/) || value.match(/\/posts\/(\d+)/);
-    return match && match[1] ? match[1] : '';
+    // Ignore query and hash. A year or index in the slug, or a number in
+    // ?ref=, is not the post id. Patreon puts the id at the end:
+    // /posts/<id> and /<creator>/posts/<slug>-<id>.
+    const path = String(href).split(/[?#]/)[0];
+    const direct = path.match(/\/posts\/(\d+)(?:\/|$)/);
+    if (direct && direct[1]) return direct[1];
+    const slugged = path.match(/\/posts\/[^/?#]*-(\d+)(?:\/|$)/);
+    return slugged && slugged[1] ? slugged[1] : '';
+  }
+
+  // "See more posts" / "Unlock more posts" are the feed's own controls and
+  // upsell copy. They are not a recommendation rail. Matching the bare
+  // substring "more post" treated those headings as a reason to drop the post.
+  function isRecommendationHeading(text) {
+    const normalized = normalizeLabel(text);
+    if (!normalized) return false;
+    if (/see more post|load more post|show more post|view more post|unlock more post|loading more post/.test(normalized)) {
+      return false;
+    }
+    const phrases = [
+      'popular post',
+      'related post',
+      'you might like',
+      'recommended',
+      'popular product',
+      'more posts by',
+      'more from this',
+      'posts you might'
+    ];
+    for (let i = 0; i < phrases.length; i++) {
+      if (normalized.indexOf(phrases[i]) !== -1) return true;
+    }
+    return false;
+  }
+
+  // Site chrome is the page header, nav, and aside. A post card has its own
+  // <header> around the title permalink. That link is the post id, not chrome.
+  function isSiteChrome(el) {
+    if (!el || typeof el.closest !== 'function') return false;
+    const chrome = el.closest('header, nav, aside');
+    if (!chrome) return false;
+    if (typeof chrome.closest === 'function' && chrome.closest('[data-tag="post-card"]')) return false;
+    return true;
   }
 
   function isFeedLoadMoreLabel(text, inTail) {
@@ -259,6 +299,8 @@
   root.FeedAutoLoad = {
     LIMITS: LIMITS,
     postIdFromHref: postIdFromHref,
+    isRecommendationHeading: isRecommendationHeading,
+    isSiteChrome: isSiteChrome,
     isFeedLoadMoreLabel: isFeedLoadMoreLabel,
     isLoadMoreDataTag: isLoadMoreDataTag,
     isLoadingSignal: isLoadingSignal,

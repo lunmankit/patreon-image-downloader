@@ -1,7 +1,6 @@
 (async () => {
   try {
     const result = [];
-    const imagesSet = new Set();
 
     // Helper to send real-time progress/completion updates to popup safely
     function sendMessageSafely(msg) {
@@ -76,28 +75,36 @@
       };
     }
 
-    // Helper to identify and filter out recommended/popular/sidebar post links
+    // Helper to identify and filter out recommended/popular/sidebar post links.
+    // A header, footer, or "see more posts" line inside a post card is part of
+    // that post. Dropping it used to throw away the permalink once the card
+    // unmounted, so the post still counted as found and its photos never downloaded.
     function isUnwantedLink(a) {
-      if (!a) return false;
+      if (!a || !a.closest) return false;
 
-      // 1. Direct ancestor tag checks for sidebar, footer, or recommendations
-      if (a.closest('footer, aside, [data-tag="sidebar"], [data-tag="post-recommendations"], [data-tag="related-posts"], [data-tag="popular-posts"], [data-tag="more-posts"]')) {
-        return true;
+      const marker = a.closest('footer, aside, [data-tag="sidebar"], [data-tag="post-recommendations"], [data-tag="related-posts"], [data-tag="popular-posts"], [data-tag="more-posts"]');
+      if (marker && !marker.closest('[data-tag="post-card"]')) return true;
+
+      const card = a.closest('[data-tag="post-card"]');
+      const sectionBlock = a.closest('section, div[data-tag], div[class*="Container"], div[class*="Grid"]');
+      if (!sectionBlock) return false;
+      if (card && (sectionBlock === card || (typeof card.contains === 'function' && card.contains(sectionBlock)))) {
+        return false;
       }
 
-      // 2. Check section headings for recommendation titles
-      const sectionBlock = a.closest('section, div[data-tag], div[class*="Container"], div[class*="Grid"]');
-      if (sectionBlock) {
-        const headings = sectionBlock.querySelectorAll('h1, h2, h3, h4, h5');
-        for (const h of headings) {
-          const txt = (h.innerText || h.textContent || '').toLowerCase();
+      const headings = sectionBlock.querySelectorAll('h1, h2, h3, h4, h5');
+      for (const h of headings) {
+        const txt = h.innerText || h.textContent || '';
+        if (globalThis.FeedAutoLoad && typeof FeedAutoLoad.isRecommendationHeading === 'function') {
+          if (FeedAutoLoad.isRecommendationHeading(txt)) return true;
+        } else {
+          const lower = txt.toLowerCase();
           if (
-            txt.includes('popular post') || 
-            txt.includes('related post') || 
-            txt.includes('more post') || 
-            txt.includes('you might like') || 
-            txt.includes('recommended') ||
-            txt.includes('popular products')
+            lower.includes('popular post') ||
+            lower.includes('related post') ||
+            lower.includes('you might like') ||
+            lower.includes('recommended') ||
+            lower.includes('popular products')
           ) {
             return true;
           }
@@ -352,8 +359,10 @@
 
     // Check page mode: Single Post vs Feed
     const pathname = window.location.pathname;
-    const singlePostMatch = pathname.match(/\/posts\/.*?-?(\d+)/) || pathname.match(/\/posts\/(\d+)/);
-    const isSinglePostPage = !!(singlePostMatch && singlePostMatch[1]);
+    const singlePostId = (globalThis.FeedAutoLoad && typeof FeedAutoLoad.postIdFromHref === 'function')
+      ? FeedAutoLoad.postIdFromHref(pathname)
+      : '';
+    const isSinglePostPage = !!singlePostId;
 
     // -------------------------------------------------------------
     // Step 0: Auto-Load ALL Posts (Feed / creator pages only)
@@ -373,6 +382,9 @@
     }
 
     function isPageChrome(el) {
+      if (globalThis.FeedAutoLoad && typeof FeedAutoLoad.isSiteChrome === 'function') {
+        return FeedAutoLoad.isSiteChrome(el);
+      }
       return !!(el && el.closest && el.closest('header, nav, aside'));
     }
 
@@ -419,8 +431,11 @@
       }
       feedPostCards().forEach((card) => {
         add(card.getAttribute('data-post-id'));
-        const link = card.querySelector('a[href*="/posts/"]');
-        if (link && !isIgnoredRegion(link)) add(Feed.postIdFromHref(link.getAttribute('href')));
+        const links = card.querySelectorAll('a[href*="/posts/"]');
+        for (let i = 0; i < links.length; i++) {
+          if (isIgnoredRegion(links[i])) continue;
+          add(Feed.postIdFromHref(links[i].getAttribute('href')));
+        }
       });
       document.querySelectorAll('a[href*="/posts/"]').forEach((anchor) => {
         if (isIgnoredRegion(anchor)) return;
@@ -717,10 +732,42 @@
       };
     }
 
+    let seenCardImages = (globalThis.PatreonMedia && typeof PatreonMedia.createSeenImages === 'function')
+      ? PatreonMedia.createSeenImages()
+      : null;
+
+    function cardPostId(card) {
+      if (!card) return '';
+      const direct = card.getAttribute('data-post-id');
+      if (direct) return String(direct);
+      if (!globalThis.FeedAutoLoad) return '';
+      const links = card.querySelectorAll('a[href*="/posts/"]');
+      for (let i = 0; i < links.length; i++) {
+        if (isIgnoredRegion(links[i])) continue;
+        const id = FeedAutoLoad.postIdFromHref(links[i].getAttribute('href'));
+        if (id) return id;
+      }
+      return '';
+    }
+
+    function rememberVisiblePostImages() {
+      if (!seenCardImages || !globalThis.PatreonMedia) return;
+      feedPostCards().forEach((card) => {
+        const urls = [];
+        const images = card.querySelectorAll('img');
+        for (let i = 0; i < images.length; i++) {
+          const src = images[i].currentSrc || images[i].getAttribute('src') || images[i].src || '';
+          if (src) urls.push(src);
+        }
+        seenCardImages = PatreonMedia.rememberImages(seenCardImages, cardPostId(card), urls);
+      });
+    }
+
     async function autoLoadAllPosts() {
       const Feed = globalThis.FeedAutoLoad;
       const limits = Feed.LIMITS;
       const net = watchFeedResources();
+      rememberVisiblePostImages();
       let state = Feed.notePosts(
         Feed.initialState(),
         collectFeedPostIds(),
@@ -747,13 +794,16 @@
 
       try {
         while (!state.done && state.loops < limits.maxLoops) {
+          rememberVisiblePostImages();
           announce(false);
           await scrollFeedToEnd();
           clickTailLoadMore();
           const observation = await waitForFeedSettle(net, announce);
           state = Feed.decide(state, observation);
+          rememberVisiblePostImages();
         }
       } finally {
+        rememberVisiblePostImages();
         net.disconnect();
       }
 
@@ -789,21 +839,21 @@
 
     if (isSinglePostPage) {
       // Single post page: Only process the main post ID, ignore bottom recommendation grids
-      postIds.add(singlePostMatch[1]);
+      postIds.add(singlePostId);
     } else {
-      // Feed page: Process main stream post IDs and skip recommended ads
+      // Feed page: Process main stream post IDs and skip recommended ads.
+      // Card title links live in the card's own header; isIgnoredRegion keeps those.
       const postLinks = document.querySelectorAll('a[href*="/posts/"]');
       postLinks.forEach(a => {
-        if (isUnwantedLink(a)) return;
-        const href = a.getAttribute('href') || '';
-        const match = href.match(/\/posts\/.*?-?(\d+)/) || href.match(/\/posts\/(\d+)/);
-        if (match && match[1]) {
-          postIds.add(match[1]);
-        }
+        if (isIgnoredRegion(a)) return;
+        const id = globalThis.FeedAutoLoad
+          ? FeedAutoLoad.postIdFromHref(a.getAttribute('href') || '')
+          : '';
+        if (id) postIds.add(id);
       });
 
       document.querySelectorAll('[data-post-id]').forEach(el => {
-        if (isUnwantedLink(el)) return;
+        if (isIgnoredRegion(el)) return;
         const id = el.getAttribute('data-post-id');
         if (id) postIds.add(id);
       });
@@ -814,98 +864,108 @@
       });
     }
 
-    // -------------------------------------------------------------
-    // Step 2: Fetch Patreon API for ALL detected Post IDs
-    // -------------------------------------------------------------
-    if (postIds.size > 0) {
-      reportStatus(`正在獲取 ${postIds.size} 篇貼文的高解析度媒體資料...`);
-      const postIdArray = Array.from(postIds);
+    function pushCollected(item) {
+      if (!item || !item.url || !globalThis.PatreonMedia) return;
+      const filename = extractFilename(
+        item.url,
+        item.name || '',
+        item.postTitle || '',
+        result.length + 1
+      );
+      PatreonMedia.absorbInto(result, {
+        url: item.url,
+        filename: filename,
+        width: item.width || 0,
+        height: item.height || 0,
+        postId: item.postId ? String(item.postId) : '',
+        postTitle: item.postTitle ? String(item.postTitle) : '',
+        postDate: item.postDate ? String(item.postDate) : ''
+      });
+    }
 
-      await Promise.all(postIdArray.map(async (postId) => {
+    async function mapPool(items, limit, worker) {
+      let cursor = 0;
+      const runners = [];
+      const count = Math.min(limit, items.length);
+      for (let i = 0; i < count; i++) {
+        runners.push((async () => {
+          while (cursor < items.length) {
+            const index = cursor;
+            cursor += 1;
+            await worker(items[index], index);
+          }
+        })());
+      }
+      await Promise.all(runners);
+    }
+
+    async function fetchPostJson(postId) {
+      for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const apiRes = await fetch(`/api/posts/${postId}?include=media,attachments,post_file`, {
             headers: { 'Accept': 'application/vnd.api+json' }
           });
-
-          if (!apiRes.ok) return;
-          const json = await apiRes.json();
-
-          const attributes = json.data?.attributes || {};
-          const postTitle = attributes.title || '';
-          const postDate = attributes.published_at || attributes.created_at || '';
-          const postMeta = { postId: postId, postTitle: postTitle, postDate: postDate };
-          let mediaIndex = 1;
-
-          if (Array.isArray(json.included)) {
-            json.included.forEach((item) => {
-              if (item.type === 'media') {
-                const attrs = item.attributes || {};
-                const fullResUrl = attrs.download_url || attrs.image_urls?.original || attrs.image_urls?.default || attrs.url;
-
-                if (fullResUrl) {
-                  const urlBasePath = fullResUrl.split('?')[0];
-                  if (!imagesSet.has(urlBasePath)) {
-                    imagesSet.add(urlBasePath);
-
-                    const originalName = attrs.file_name || attrs.name;
-                    const filename = extractFilename(fullResUrl, originalName, postTitle, mediaIndex);
-
-                    result.push(imageRecord(fullResUrl, filename, postMeta));
-                    mediaIndex++;
-                  }
-                }
-              } else if (item.type === 'attachment') {
-                const attrs = item.attributes || {};
-                if (attrs.url) {
-                  const urlBasePath = attrs.url.split('?')[0];
-                  if (!imagesSet.has(urlBasePath)) {
-                    imagesSet.add(urlBasePath);
-                    const originalName = attrs.file_name || attrs.name;
-                    const filename = extractFilename(attrs.url, originalName, postTitle, mediaIndex);
-
-                    result.push(imageRecord(attrs.url, filename, postMeta));
-                    mediaIndex++;
-                  }
-                }
-              }
-            });
+          if (apiRes.status === 429 || apiRes.status >= 500) {
+            await sleep(350 * (attempt + 1));
+            continue;
           }
-
-          const postFile = json.data?.attributes?.post_file;
-          if (postFile && postFile.url) {
-            const urlBasePath = postFile.url.split('?')[0];
-            if (!imagesSet.has(urlBasePath)) {
-              imagesSet.add(urlBasePath);
-              const filename = extractFilename(postFile.url, postFile.name, postTitle, mediaIndex);
-              result.push(imageRecord(postFile.url, filename, postMeta));
-              mediaIndex++;
-            }
-          }
+          if (!apiRes.ok) return null;
+          return await apiRes.json();
         } catch (e) {
-          console.warn(`Failed to fetch API for post ${postId}:`, e);
+          if (attempt === 1) console.warn(`Failed to fetch API for post ${postId}:`, e);
+          await sleep(300);
         }
-      }));
+      }
+      return null;
     }
 
     // -------------------------------------------------------------
-    // Step 3: Fallback DOM Scan
+    // Step 2: Fetch Patreon API for ALL detected Post IDs
     // -------------------------------------------------------------
-    if (result.length === 0) {
-      reportStatus("正在備用掃瞄頁面 DOM 圖片...");
-      let index = 1;
+    if (postIds.size > 0) {
+      if (!globalThis.PatreonMedia) {
+        reportStatus('媒體解析元件未載入，請重新載入擴充功能後再試。');
+      } else {
+        reportStatus(`正在獲取 ${postIds.size} 篇貼文的高解析度媒體資料...`);
+        const postIdArray = Array.from(postIds);
+        await mapPool(postIdArray, 4, async (postId) => {
+          const json = await fetchPostJson(postId);
+          if (!json) return;
+          if (!json.data) json.data = {};
+          if (!json.data.id) json.data.id = postId;
+          const found = PatreonMedia.collectPostImages(json);
+          for (let i = 0; i < found.length; i++) pushCollected(found[i]);
+        });
+      }
+    }
+
+    // -------------------------------------------------------------
+    // Step 3: Photos remembered from cards that have since unmounted,
+    // plus whatever is still on screen. A resized card image does not
+    // replace the original the API already kept.
+    // -------------------------------------------------------------
+    if (globalThis.PatreonMedia) {
+      const seenCount = seenCardImages && seenCardImages.items ? seenCardImages.items.length : 0;
+      if (result.length === 0) {
+        reportStatus('正在備用掃瞄頁面 DOM 圖片...');
+      } else if (seenCount > 0) {
+        reportStatus('正在補上已展開貼文裡的圖片...');
+      }
+      if (seenCardImages && seenCardImages.items) {
+        for (let i = 0; i < seenCardImages.items.length; i++) {
+          const seen = seenCardImages.items[i];
+          pushCollected({ url: seen.url, postId: seen.postId });
+        }
+      }
       const imgElements = document.querySelectorAll('img');
       imgElements.forEach((img) => {
         if (isUnwantedLink(img)) return;
-        let src = img.currentSrc || img.src;
-        if (src && (src.includes('patreonusercontent.com') || src.includes('pbs.twimg.com'))) {
-          const urlBasePath = src.split('?')[0];
-          if (!imagesSet.has(urlBasePath)) {
-            imagesSet.add(urlBasePath);
-            const filename = extractFilename(src, null, 'Patreon_Image', index);
-            result.push(imageRecord(src, filename, {}));
-            index++;
-          }
-        }
+        const card = img.closest('[data-tag="post-card"]');
+        const postId = card ? cardPostId(card) : '';
+        if (isSinglePostPage && postId && postId !== singlePostId) return;
+        const src = img.currentSrc || img.getAttribute('src') || img.src || '';
+        if (!PatreonMedia.isPostImageUrl(src)) return;
+        pushCollected({ url: src, postId: postId });
       });
     }
 
@@ -922,8 +982,16 @@
           batch.map(async (item) => {
             const dims = await fetchDimensions(item.url);
             if (dims.width > 0 && dims.height > 0) {
-              item.width = dims.width;
-              item.height = dims.height;
+              const known = Math.max(item.width || 0, item.height || 0);
+              const measured = Math.max(dims.width, dims.height);
+              const fullFile = globalThis.PatreonMedia
+                && PatreonMedia.renditionRank(item.url) >= 90000;
+              // A full original can probe as a tiny stand-in. Keep the file's
+              // real size so the minimum-size filter does not drop it.
+              if (!(fullFile && known >= 400 && measured * 4 < known)) {
+                item.width = dims.width;
+                item.height = dims.height;
+              }
             }
           })
         );
