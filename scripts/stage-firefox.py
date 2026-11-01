@@ -16,10 +16,23 @@ ROOT = Path(__file__).resolve().parent.parent
 CHROME_MANIFEST = ROOT / "manifest.json"
 FIREFOX_MANIFEST = ROOT / "manifest.firefox.json"
 OUT = ROOT / "dist" / "firefox"
-FILES = ("background.js", "content.js", "download-path.js", "fantia.js", "feed-autoload.js", "patreon-media.js", "popup.html", "popup.js")
+FILES = (
+    "background.js",
+    "content.js",
+    "download-path.js",
+    "fantia.js",
+    "feed-autoload.js",
+    "gallery-content.js",
+    "gallery-scan.js",
+    "patreon-media.js",
+    "permission.html",
+    "permission.js",
+    "popup.html",
+    "popup.js",
+)
 
 CHROME_BACKGROUND = {"service_worker": "background.js"}
-FIREFOX_BACKGROUND = {"scripts": ["background.js"]}
+FIREFOX_BACKGROUND = {"scripts": ["gallery-scan.js", "background.js"]}
 
 
 def load(path):

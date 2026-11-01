@@ -257,7 +257,7 @@ assert.ok(popupJs.includes('plan.paths[index]'));
 const chromeManifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 const firefoxManifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.firefox.json'), 'utf8'));
 assert.deepStrictEqual(chromeManifest.background, { service_worker: 'background.js' });
-assert.deepStrictEqual(firefoxManifest.background, { scripts: ['background.js'] });
+assert.deepStrictEqual(firefoxManifest.background, { scripts: ['gallery-scan.js', 'background.js'] });
 assert.strictEqual(chromeManifest.version, firefoxManifest.version);
 
 console.log('download path tests passed');

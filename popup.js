@@ -5,6 +5,9 @@ let downloadFolder = 'Patreon_Downloads';
 let downloadBusy = false;
 let suggestedCustomName = '';
 let folderPrefsReady = false;
+let scanNotice = '';
+let pendingPageUrls = [];
+let currentPageUrl = '';
 
 function pageKind(url) {
   if (!url) return '';
@@ -13,8 +16,15 @@ function pageKind(url) {
     const host = parsed.hostname;
     if (host === 'patreon.com' || host.endsWith('.patreon.com')) return 'patreon';
     if (host === 'fantia.jp' || host.endsWith('.fantia.jp')) return 'fantia';
+    if (typeof GalleryScan !== 'undefined' && GalleryScan.originMatchPattern(url)) return 'generic';
   } catch (e) {}
   return '';
+}
+
+function folderForKind(kind) {
+  if (kind === 'fantia') return 'Fantia_Downloads';
+  if (kind === 'generic') return 'Gallery_Downloads';
+  return 'Patreon_Downloads';
 }
 
 function escapeHtml(value) {
@@ -40,6 +50,8 @@ const useShortNameBtn = document.getElementById('use-short-name-btn');
 const statusEl = document.getElementById('status');
 const countEl = document.getElementById('count');
 const previewContainer = document.getElementById('preview-container');
+const probeBtn = document.getElementById('probe-btn');
+const autoLoadRow = document.getElementById('auto-load-row');
 
 // Load saved filter and auto-load preferences
 const savedSize = localStorage.getItem('patreon_min_size') || '400';
@@ -63,19 +75,61 @@ chrome.storage.local.get(['autoLoad', 'folderNameMode', 'customFolderName'], (re
 });
 
 // Reflect site-supported status on the toolbar icon when popup opens
+function applyGalleryResult(saved) {
+  if (!saved || saved.pageUrl !== currentPageUrl) return;
+  allExtractedImages = Array.isArray(saved.result) ? saved.result : [];
+  scanNotice = saved.notice || '';
+  pendingPageUrls = Array.isArray(saved.pendingUrls) ? saved.pendingUrls.slice() : [];
+  updateProbeButton();
+  if (!allExtractedImages.length) {
+    statusEl.innerText = scanNotice || '未找到可下載的原圖。';
+    filteredImages = [];
+    previewContainer.style.display = 'none';
+    downloadBtn.style.display = 'none';
+    updateFolderUi();
+    return;
+  }
+  applyFilterAndRender();
+}
+
+function restoreGenericScan(pageUrl) {
+  if (!chrome.storage || !chrome.storage.session) return;
+  chrome.storage.session.get(['galleryScan'], (data) => {
+    const saved = data && data.galleryScan;
+    if (!saved || saved.pageUrl !== pageUrl) return;
+    if (!saved.at || Date.now() - saved.at > 10 * 60 * 1000) return;
+    if (scanBtn.disabled) return;
+    applyGalleryResult(saved);
+  });
+}
+
 chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
   const tab = tabs && tabs[0];
   if (!tab) return;
+  currentPageUrl = tab.url || '';
   const kind = pageKind(tab.url);
-  if (kind) downloadFolder = kind === 'fantia' ? 'Fantia_Downloads' : 'Patreon_Downloads';
-  const supported = kind !== '';
+  if (kind) downloadFolder = folderForKind(kind);
+  autoLoadCb.disabled = kind === 'generic';
+  if (autoLoadRow) {
+    autoLoadRow.classList.toggle('disabled', kind === 'generic');
+    autoLoadRow.title = kind === 'generic' ? '一般圖庫只掃瞄目前頁面的縮圖連結' : '';
+  }
+  const supported = kind === 'patreon' || kind === 'fantia';
   updateFolderUi();
   chrome.runtime.sendMessage({
     type: 'SET_ICON_STATE',
     state: supported ? 'supported' : 'default',
     tabId: tab.id
   });
+  if (kind === 'generic') restoreGenericScan(tab.url);
 });
+
+if (chrome.storage && chrome.storage.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'session' || !changes.galleryScan || !changes.galleryScan.newValue) return;
+    applyGalleryResult(changes.galleryScan.newValue);
+  });
+}
 
 // Persist size filter setting
 sizeFilter.addEventListener('input', () => {
@@ -139,6 +193,16 @@ function currentPlan() {
   return DownloadPath.planDownloadPaths(filteredImages, folderOptions());
 }
 
+function updateProbeButton() {
+  if (!probeBtn) return;
+  if (pendingPageUrls.length) {
+    probeBtn.style.display = 'block';
+    probeBtn.textContent = '授權並確認其餘 ' + pendingPageUrls.length + ' 個網頁';
+  } else {
+    probeBtn.style.display = 'none';
+  }
+}
+
 function updateFolderUi() {
   const mode = folderModeSelect.value;
   customFolderInput.style.display = mode === 'custom' ? 'block' : 'none';
@@ -169,10 +233,15 @@ chrome.runtime.onMessage.addListener((msg) => {
       allExtractedImages = msg.result;
 
       if (allExtractedImages.length === 0) {
+        scanNotice = msg.notice || '';
+        pendingPageUrls = Array.isArray(msg.pendingUrls) ? msg.pendingUrls.slice() : [];
+        updateProbeButton();
         if (msg.lockedCount) {
           statusEl.innerText = `未找到可下載的圖片。已略過 ${msg.lockedCount} 個尚未解鎖的付費區塊。請先登入 Fantia，且目前的方案必須看得到這些內容。`;
         } else if (msg.notice) {
           statusEl.innerText = msg.notice;
+        } else if (pageKind(currentPageUrl) === 'generic') {
+          statusEl.innerText = '未找到可下載的原圖。';
         } else {
           statusEl.innerText = "未找到貼文圖片。";
         }
@@ -183,6 +252,9 @@ chrome.runtime.onMessage.addListener((msg) => {
         return;
       }
 
+      scanNotice = msg.notice || '';
+      pendingPageUrls = Array.isArray(msg.pendingUrls) ? msg.pendingUrls.slice() : [];
+      updateProbeButton();
       applyFilterAndRender();
       if (msg.lockedCount) {
         statusEl.innerText += `（已略過 ${msg.lockedCount} 個未解鎖的付費區塊）`;
@@ -215,11 +287,40 @@ scanBtn.addEventListener('click', async () => {
 
     const kind = pageKind(tab.url);
     if (!kind) {
-      throw new Error("請先開啟 Patreon 或 Fantia 頁面再執行掃瞄。");
+      throw new Error("請先開啟 Patreon、Fantia，或含縮圖的圖庫頁面再執行掃瞄。");
     }
-    downloadFolder = kind === 'fantia' ? 'Fantia_Downloads' : 'Patreon_Downloads';
+    downloadFolder = folderForKind(kind);
+    currentPageUrl = tab.url || '';
+    scanNotice = '';
+    pendingPageUrls = [];
+    updateProbeButton();
 
     await chrome.storage.local.set({ autoLoad: autoLoadCb.checked });
+
+    if (kind === 'generic') {
+      const pattern = GalleryScan.originMatchPattern(tab.url);
+      const has = await chrome.permissions.contains({ origins: [pattern] });
+      if (!has) {
+        await chrome.windows.create({
+          url: chrome.runtime.getURL('permission.html')
+            + '?tabId=' + encodeURIComponent(tab.id)
+            + '&pageUrl=' + encodeURIComponent(tab.url),
+          type: 'popup',
+          width: 440,
+          height: 340,
+          focused: true
+        });
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        statusEl.innerText = '請在跳出的視窗按「允許並掃瞄」。完成後再開啟這個面板，即可預覽與下載。';
+        scanBtn.disabled = false;
+        return;
+      }
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['gallery-scan.js', 'gallery-content.js']
+      });
+      return;
+    }
 
     // Inject the scanner; content.js sends 'SCAN_COMPLETE' when done.
     // feed-autoload.js decides when a Patreon feed has actually finished.
@@ -249,6 +350,7 @@ function applyFilterAndRender() {
   });
 
   statusEl.innerText = `找到 ${allExtractedImages.length} 張，篩選後剩餘 ${filteredImages.length} 張`;
+  if (scanNotice) statusEl.innerText += '。' + scanNotice;
   countEl.innerText = filteredImages.length;
 
   if (filteredImages.length > 0) {
@@ -282,6 +384,33 @@ function applyFilterAndRender() {
   });
   updateFolderUi();
 }
+
+probeBtn.addEventListener('click', async () => {
+  if (!pendingPageUrls.length || !currentPageUrl) return;
+  probeBtn.disabled = true;
+  try {
+    await chrome.storage.session.set({
+      galleryProbeRequest: {
+        pageUrl: currentPageUrl,
+        urls: pendingPageUrls.slice(),
+        result: allExtractedImages.slice()
+      }
+    });
+    await chrome.windows.create({
+      url: chrome.runtime.getURL('permission.html')
+        + '?mode=probe&tabId=' + encodeURIComponent('')
+        + '&pageUrl=' + encodeURIComponent(currentPageUrl),
+      type: 'popup',
+      width: 440,
+      height: 340,
+      focused: true
+    });
+    statusEl.innerText = '請在跳出的視窗允許這些網站。確認完成後，這個面板會更新可下載的原圖。';
+  } catch (err) {
+    statusEl.innerText = '無法開啟授權視窗：' + err.message;
+  }
+  probeBtn.disabled = false;
+});
 
 downloadBtn.addEventListener('click', () => {
   if (filteredImages.length === 0 || downloadBusy) return;

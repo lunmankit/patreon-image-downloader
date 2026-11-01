@@ -62,6 +62,9 @@
     .option-row input[type="checkbox"] {
       margin-right: 6px;
     }
+    .option-row.disabled {
+      opacity: 0.45;
+    }
     .filter-box label.stack {
       display: block;
       margin: 8px 0 0;
@@ -150,6 +153,7 @@
 <body>
   <h3>Patreon / Fantia 圖片批次下載器</h3>
   <p class="hint">Fantia 付費內容只會下載已登入且看得到的圖片，不會嘗試解鎖未購買的內容。</p>
+  <p class="hint">其他圖庫會找出「點縮圖後在新分頁開啟」的原圖。第一次掃瞄該網站會詢問權限。網頁、廣告與非圖片檔不會下載。</p>
 
   <button id="scan-btn">掃瞄頁面圖片</button>
 
@@ -160,7 +164,7 @@
     </label>
     <input type="range" id="size-filter" min="0" max="2000" step="100" value="400">
 
-    <div class="option-row">
+    <div class="option-row" id="auto-load-row">
       <input type="checkbox" id="auto-load-cb" checked>
       <label for="auto-load-cb" style="font-weight:normal; margin:0;">自動滾動或翻頁並載入所有貼文</label>
     </div>
@@ -177,15 +181,17 @@
       <div id="folder-warning"></div>
       <button type="button" id="use-short-name-btn" class="secondary" style="display:none;">改用縮短名稱</button>
     </div>
-    <p class="hint" style="margin:8px 0 0;">個別資料夾會放在 Patreon_Downloads 或 Fantia_Downloads 底下。自動命名是日期加標題，例如 20261026_Some Post Title。</p>
+    <p class="hint" style="margin:8px 0 0;">個別資料夾會放在 Patreon_Downloads、Fantia_Downloads 或 Gallery_Downloads 底下。自動命名是日期加標題，例如 20261026_Some Post Title。</p>
   </div>
 
   <div id="status">準備就緒</div>
+  <button id="probe-btn" type="button" class="secondary" style="display:none;">授權並確認其餘網頁</button>
   <button id="download-btn" style="display:none;">下載符合條件圖片 (<span id="count">0</span>)</button>
   <div id="preview-container"></div>
 
   <script src="download-path.js"></script>
   <script src="patreon-media.js"></script>
+  <script src="gallery-scan.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

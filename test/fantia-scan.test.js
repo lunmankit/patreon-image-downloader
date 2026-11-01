@@ -180,7 +180,7 @@ const chromeManifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json
 const firefoxManifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.firefox.json'), 'utf8'));
 assert.strictEqual(chromeManifest.background.service_worker, 'background.js');
 assert.strictEqual(chromeManifest.background.scripts, undefined);
-assert.deepStrictEqual(firefoxManifest.background.scripts, ['background.js']);
+assert.deepStrictEqual(firefoxManifest.background.scripts, ['gallery-scan.js', 'background.js']);
 assert.strictEqual(firefoxManifest.background.service_worker, undefined);
 for (const manifest of [chromeManifest, firefoxManifest]) {
   assert.ok(manifest.host_permissions.includes('https://fantia.jp/*'));
