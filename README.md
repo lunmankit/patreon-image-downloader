@@ -1,6 +1,6 @@
 # Patreon & Fantia Image Batch Downloader
 
-Manifest V3 extension (v1.7) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts and from Fantia posts the current browser session can already see.
+Manifest V3 extension (v1.8) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts and from Fantia posts the current browser session can already see.
 
 On a supported page, open the popup and scan. The extension collects images (preferring original / download URLs), shows a preview, and can filter by minimum width or height. Optional auto-load scrolls Patreon feeds, and on Fantia it follows listing pagination, before the scan. Patreon downloads are saved under `Patreon_Downloads/`. Fantia downloads are saved under `Fantia_Downloads/`.
 
