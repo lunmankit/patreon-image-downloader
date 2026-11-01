@@ -239,10 +239,10 @@ assert.strictEqual(domImages.images[0].postDate, '');
 assert.strictEqual(domImages.images[0].postId, '');
 
 const content = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
-assert.ok(content.includes("pathname.match(/\\/posts\\/.*?-?(\\d+)/)"));
+assert.ok(content.includes('FeedAutoLoad.postIdFromHref(pathname)'));
 assert.ok(content.includes('scanFantiaPage'));
 assert.ok(content.includes("fetch(`/api/posts/${postId}?include=media,attachments,post_file`"));
-assert.ok(content.includes('published_at'));
+assert.ok(fs.readFileSync(path.join(root, 'patreon-media.js'), 'utf8').includes('published_at'));
 assert.ok(content.includes('postDate'));
 assert.ok(fs.readFileSync(path.join(root, 'fantia.js'), 'utf8').includes('posted_at'));
 assert.ok(fs.readFileSync(path.join(root, 'scripts/stage-firefox.py'), 'utf8').includes('download-path.js'));
