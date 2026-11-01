@@ -105,9 +105,11 @@
   function chooseImageUrl(attrs) {
     const source = attrs || {};
     const urls = source.image_urls || {};
+    const display = source.display || {};
     const candidates = [
       urls.original,
       source.download_url,
+      display.url,
       urls.default_large,
       urls.default,
       urls.url,
@@ -132,9 +134,54 @@
     const source = attrs || {};
     const meta = source.metadata || {};
     const dims = meta.dimensions || {};
-    const width = Number(dims.w || dims.width || source.width || 0) || 0;
-    const height = Number(dims.h || dims.height || source.height || 0) || 0;
+    const display = source.display || {};
+    const width = Number(dims.w || dims.width || source.width || display.width || 0) || 0;
+    const height = Number(dims.h || dims.height || source.height || display.height || 0) || 0;
     return { width: width, height: height };
+  }
+
+  // Full-file URLs are probed in batches. Under load the probe sometimes
+  // onloads a tiny stand-in. Recording that size makes the minimum-size
+  // filter drop a photo on one scan and keep it on the next.
+  function resolveDimensions(current, measured, url) {
+    const width = Number(current && current.width) || 0;
+    const height = Number(current && current.height) || 0;
+    if (renditionRank(url) >= 90000) return { width: width, height: height };
+    const measuredWidth = Number(measured && measured.width) || 0;
+    const measuredHeight = Number(measured && measured.height) || 0;
+    if (measuredWidth <= 0 || measuredHeight <= 0) return { width: width, height: height };
+    if (width > 0 || height > 0) {
+      return {
+        width: Math.max(width, measuredWidth),
+        height: Math.max(height, measuredHeight)
+      };
+    }
+    return { width: measuredWidth, height: measuredHeight };
+  }
+
+  function urlsFromSrcset(value) {
+    const found = [];
+    const parts = String(value || '').split(',');
+    for (let i = 0; i < parts.length; i++) {
+      const piece = parts[i].trim().split(/\s+/)[0];
+      if (piece) found.push(piece);
+    }
+    return found;
+  }
+
+  function urlsFromImageFields(fields) {
+    const src = fields || {};
+    const found = [];
+    function add(url) {
+      if (url) found.push(String(url));
+    }
+    add(src.currentSrc);
+    add(src.src);
+    add(src.dataSrc);
+    add(src.dataOriginal);
+    urlsFromSrcset(src.srcset).forEach(add);
+    urlsFromSrcset(src.dataSrcset).forEach(add);
+    return found;
   }
 
   function passesMinSize(img, minSize) {
@@ -221,7 +268,6 @@
     const postTitle = attributes.title || '';
     const postDate = attributes.published_at || attributes.created_at || '';
     const images = [];
-    const seenMediaIds = {};
 
     function push(url, name, dims, mediaId) {
       if (!url || isSkippableUrl(url)) return;
@@ -237,7 +283,6 @@
         postDate: postDate,
         mediaId: mediaId ? String(mediaId) : ''
       });
-      if (mediaId) seenMediaIds[String(mediaId)] = true;
     }
 
     const included = Array.isArray(json && json.included) ? json.included : [];
@@ -263,10 +308,13 @@
     if (doc) {
       eachContentImage(doc, function (attrs) {
         const mediaId = attrs.media_id ? String(attrs.media_id) : '';
-        if (mediaId && seenMediaIds[mediaId]) return;
         const src = attrs.src || attrs.url || '';
         if (!src || !isPostImageUrl(src) && !imageExtension(src)) return;
         if (isSkippableUrl(src)) return;
+        // Same file as an included original shares a hash; absorb keeps the
+        // larger URL. Skipping here dropped the only copy when `included`
+        // had a thumbnail for that id and the src was a better rendition,
+        // or when the two URLs did not share a hash.
         const width = Number(attrs.media_width || attrs.width || 0) || 0;
         const height = Number(attrs.media_height || attrs.height || 0) || 0;
         const dims = renditionRank(src) >= 90000 ? { width: width, height: height } : { width: 0, height: 0 };
@@ -303,6 +351,65 @@
     return images;
   }
 
+  function eachRelationshipId(json, visit) {
+    const data = json && json.data ? json.data : {};
+    const rel = data.relationships || {};
+    const names = ['media', 'images', 'attachments', 'attachments_media'];
+    for (let n = 0; n < names.length; n++) {
+      const relItem = rel[names[n]] || {};
+      let list = relItem.data || [];
+      if (list && !Array.isArray(list)) list = [list];
+      for (let i = 0; i < list.length; i++) {
+        if (list[i] && list[i].id != null && list[i].id !== '') visit(String(list[i].id));
+      }
+    }
+    const attributes = data.attributes || {};
+    let doc = null;
+    if (attributes.content_json_string) {
+      try { doc = JSON.parse(attributes.content_json_string); } catch (e) {}
+    }
+    if (doc) {
+      eachContentImage(doc, function (attrs) {
+        if (attrs && attrs.media_id != null && attrs.media_id !== '') visit(String(attrs.media_id));
+      });
+    }
+  }
+
+  function nonImageMediaIds(json) {
+    const ids = {};
+    const included = Array.isArray(json && json.included) ? json.included : [];
+    for (let i = 0; i < included.length; i++) {
+      const item = included[i];
+      if (!item || item.id == null) continue;
+      const attrs = item.attributes || {};
+      const mime = String(attrs.mimetype || attrs.media_type || '').toLowerCase();
+      if (/video|audio|mpegurl/.test(mime)) ids[String(item.id)] = true;
+    }
+    return ids;
+  }
+
+  // Ids that still need /api/media/{id}: not in this payload as a full-size
+  // image. A thumbnail-only include used to count as "already collected",
+  // so the rest of that post's photos never arrived.
+  function mediaIdsToFetch(json, images) {
+    const full = {};
+    const list = images || [];
+    for (let i = 0; i < list.length; i++) {
+      const image = list[i];
+      if (!image || image.mediaId == null || image.mediaId === '') continue;
+      if (renditionRank(image.url) >= 90000) full[String(image.mediaId)] = true;
+    }
+    const skip = nonImageMediaIds(json);
+    const out = [];
+    const seen = {};
+    eachRelationshipId(json, function (id) {
+      if (seen[id] || full[id] || skip[id]) return;
+      seen[id] = true;
+      out.push(id);
+    });
+    return out;
+  }
+
   root.PatreonMedia = {
     resizeParams: resizeParams,
     renditionRank: renditionRank,
@@ -315,6 +422,9 @@
     rememberImages: rememberImages,
     absorbInto: absorbInto,
     collectPostImages: collectPostImages,
-    passesMinSize: passesMinSize
+    passesMinSize: passesMinSize,
+    resolveDimensions: resolveDimensions,
+    urlsFromImageFields: urlsFromImageFields,
+    mediaIdsToFetch: mediaIdsToFetch
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
