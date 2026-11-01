@@ -356,50 +356,321 @@
     const isSinglePostPage = !!(singlePostMatch && singlePostMatch[1]);
 
     // -------------------------------------------------------------
-    // Step 0: Auto-Load ALL Posts (Feed pages only)
+    // Step 0: Auto-Load ALL Posts (Feed / creator pages only)
     // -------------------------------------------------------------
-    async function autoLoadAllPosts() {
-      let previousPostCount = 0;
-      let noChangeCount = 0;
-      const maxRetries = 3;
-      const maxLoops = 100;
+    // End the feed only after the DOM has settled, the loading indicator
+    // below the last post card is gone, and no real load-more control
+    // remains. Counting every a[href*="/posts/"] (sidebar, recommendations,
+    // repeated links) and waiting 800ms after a smooth scroll stopped the
+    // scan while "loading more posts" was still on screen.
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
 
-      for (let i = 0; i < maxLoops; i++) {
-        const currentCount = document.querySelectorAll('a[href*="/posts/"]').length;
-        reportStatus(`正在自動展開貼文 (已找到約 ${currentCount} 篇貼文)...`);
+    function classText(el) {
+      if (!el) return '';
+      if (typeof el.className === 'string') return el.className;
+      if (el.className && typeof el.className.baseVal === 'string') return el.className.baseVal;
+      return el.getAttribute('class') || '';
+    }
 
-        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-        await new Promise(r => setTimeout(r, 800));
+    function isIgnoredRegion(el) {
+      if (!el || !el.closest) return false;
+      if (el.closest('header, nav, aside')) return true;
+      return isUnwantedLink(el);
+    }
 
-        const buttons = Array.from(document.querySelectorAll('button, div[role="button"], a[role="button"]'));
-        const loadMoreBtn = buttons.find(b => {
-          const txt = (b.innerText || b.textContent || '').toLowerCase();
-          return (txt.includes('load more') || txt.includes('show more') || txt.includes('view more') || txt.includes('載入更多') || txt.includes('更多'))
-                 && b.offsetParent !== null;
-        });
+    function isVisible(el) {
+      if (!el || el.isConnected === false) return false;
+      if (el.hidden) return false;
+      let style = null;
+      try {
+        style = window.getComputedStyle(el);
+      } catch (e) {}
+      if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+      if (parseFloat(style.opacity) === 0) return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width >= 8 && rect.height >= 8;
+    }
 
-        if (loadMoreBtn) {
-          loadMoreBtn.click();
-          await new Promise(r => setTimeout(r, 1200));
+    function feedPostCards() {
+      return Array.from(document.querySelectorAll('[data-tag="post-card"]')).filter((el) => {
+        return !isIgnoredRegion(el);
+      });
+    }
+
+    function collectFeedPostIds() {
+      const Feed = globalThis.FeedAutoLoad;
+      const ids = [];
+      const seen = new Set();
+      function add(id) {
+        if (!id) return;
+        const value = String(id);
+        if (!value || seen.has(value)) return;
+        seen.add(value);
+        ids.push(value);
+      }
+      feedPostCards().forEach((card) => {
+        add(card.getAttribute('data-post-id'));
+        const link = card.querySelector('a[href*="/posts/"]');
+        if (link && !isIgnoredRegion(link)) add(Feed.postIdFromHref(link.getAttribute('href')));
+      });
+      document.querySelectorAll('a[href*="/posts/"]').forEach((anchor) => {
+        if (isIgnoredRegion(anchor)) return;
+        if (anchor.closest('[data-tag="post-card"]')) return;
+        add(Feed.postIdFromHref(anchor.getAttribute('href')));
+      });
+      document.querySelectorAll('[data-post-id]').forEach((el) => {
+        if (isIgnoredRegion(el)) return;
+        add(el.getAttribute('data-post-id'));
+      });
+      return ids;
+    }
+
+    function activatableControl(el) {
+      if (!el || !el.closest) return null;
+      const target = el.closest('button, [role="button"], a');
+      if (!target || isIgnoredRegion(target)) return null;
+      if (target.closest('[data-tag="post-card"]')) return null;
+      if (target.disabled || target.getAttribute('aria-disabled') === 'true') return null;
+      if (String(target.tagName).toUpperCase() === 'A') {
+        const href = (target.getAttribute('href') || '').trim();
+        if (href && href !== '#' && href.toLowerCase().indexOf('javascript:') !== 0) return null;
+      }
+      if (!isVisible(target)) return null;
+      return target;
+    }
+
+    function scanFeedTail() {
+      const Feed = globalThis.FeedAutoLoad;
+      const cards = feedPostCards();
+      const lastCard = cards.length ? cards[cards.length - 1] : null;
+      const selector = [
+        'button',
+        '[role="button"]',
+        'a',
+        'svg',
+        '[role="progressbar"]',
+        '[data-tag*="loading"]',
+        '[data-tag*="Loading"]',
+        '[class*="LoadingSpinner"]'
+      ].join(', ');
+      const candidates = document.querySelectorAll(selector);
+      let busy = false;
+      let loadMoreEl = null;
+      for (let i = 0; i < candidates.length; i++) {
+        const el = candidates[i];
+        if (el.closest('[data-tag="post-card"]')) continue;
+        if (isIgnoredRegion(el)) continue;
+        if (lastCard && (lastCard.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) === 0) continue;
+        if (!isVisible(el)) continue;
+        const info = {
+          ariaLabel: el.getAttribute('aria-label') || '',
+          text: el.innerText || el.textContent || '',
+          dataTag: el.getAttribute('data-tag') || '',
+          className: classText(el),
+          tagName: el.tagName || '',
+          role: el.getAttribute('role') || ''
+        };
+        if (Feed.isLoadingSignal(info)) busy = true;
+        const clickable = activatableControl(el);
+        if (!clickable) continue;
+        const label = (clickable.getAttribute('aria-label') || '') + ' ' + (clickable.innerText || clickable.textContent || '');
+        const dataTag = (clickable.getAttribute('data-tag') || '') + ' ' + info.dataTag;
+        if (Feed.isFeedLoadMoreLabel(label) || Feed.isLoadMoreDataTag(dataTag)) {
+          loadMoreEl = clickable;
         }
+      }
+      return {
+        busy: busy,
+        hasLoadMore: !!loadMoreEl,
+        loadMoreEl: loadMoreEl,
+        postCardCount: cards.length
+      };
+    }
 
-        const updatedPostCount = document.querySelectorAll('a[href*="/posts/"]').length;
-        if (updatedPostCount === previousPostCount && updatedPostCount > 0) {
-          noChangeCount++;
-          if (noChangeCount >= maxRetries) {
-            reportStatus(`貼文已全部展開 (共 ${updatedPostCount} 篇)`);
-            break;
+    function feedMutationMatters(record) {
+      const targetNode = record.target;
+      const target = targetNode && targetNode.nodeType === 1
+        ? targetNode
+        : targetNode && targetNode.parentElement;
+      if (!target || !target.closest) return true;
+      if (isIgnoredRegion(target)) return false;
+      if (target.closest('[data-tag="post-card"]')) return false;
+      const added = record.addedNodes ? record.addedNodes.length : 0;
+      const removed = record.removedNodes ? record.removedNodes.length : 0;
+      return added + removed > 0;
+    }
+
+    function jumpScroll(node, top) {
+      if (!node) return;
+      try {
+        node.scrollTop = top;
+      } catch (e) {}
+    }
+
+    async function scrollFeedToEnd() {
+      const scrollingElement = document.scrollingElement || document.documentElement;
+      const view = window.innerHeight || 800;
+      const height = scrollingElement.scrollHeight || (document.body ? document.body.scrollHeight : 0) || 0;
+      jumpScroll(scrollingElement, Math.max(0, height - view - 320));
+      const cards = feedPostCards();
+      let node = cards.length ? cards[cards.length - 1] : document.querySelector('main');
+      while (node) {
+        if (node.scrollHeight > node.clientHeight + 32) jumpScroll(node, node.scrollHeight);
+        node = node.parentElement;
+      }
+      await sleep(80);
+      const latest = document.scrollingElement || document.documentElement;
+      jumpScroll(latest, latest.scrollHeight || height);
+      await sleep(80);
+      const again = document.scrollingElement || document.documentElement;
+      jumpScroll(again, again.scrollHeight || height);
+    }
+
+    function watchFeedResources() {
+      const net = {
+        stamp: 0,
+        at: 0,
+        disconnect() {}
+      };
+      if (typeof PerformanceObserver !== 'function' || !globalThis.FeedAutoLoad) return net;
+      try {
+        const observer = new PerformanceObserver((list) => {
+          const entries = list.getEntries();
+          for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            if (!globalThis.FeedAutoLoad.isFeedResource(entry.name, entry.initiatorType)) continue;
+            net.stamp += 1;
+            net.at = Date.now();
           }
-        } else {
-          noChangeCount = 0;
-          previousPostCount = updatedPostCount;
+        });
+        observer.observe({ type: 'resource', buffered: false });
+        net.disconnect = function () {
+          try { observer.disconnect(); } catch (e) {}
+        };
+      } catch (e) {}
+      return net;
+    }
+
+    async function waitForFeedSettle(net, announce) {
+      const Feed = globalThis.FeedAutoLoad;
+      const limits = Feed.LIMITS;
+      const baselineIds = new Set(collectFeedPostIds());
+      const baselineCards = feedPostCards().length;
+      let lastActivity = Date.now();
+      let resourceStamp = net.stamp;
+      const started = Date.now();
+      const observer = new MutationObserver((records) => {
+        for (let i = 0; i < records.length; i++) {
+          if (feedMutationMatters(records[i])) {
+            lastActivity = Date.now();
+            return;
+          }
         }
+      });
+      const root = document.body || document.documentElement;
+      if (root) observer.observe(root, { childList: true, subtree: true });
+
+      let latest = scanFeedTail();
+      try {
+        for (;;) {
+          await sleep(200);
+          if (net.stamp !== resourceStamp) {
+            resourceStamp = net.stamp;
+            lastActivity = Date.now();
+          }
+          latest = scanFeedTail();
+          const ids = collectFeedPostIds();
+          let grewDuringWait = latest.postCardCount > baselineCards;
+          if (!grewDuringWait) {
+            for (let i = 0; i < ids.length; i++) {
+              if (!baselineIds.has(ids[i])) {
+                grewDuringWait = true;
+                break;
+              }
+            }
+          }
+          const elapsed = Date.now() - started;
+          const quietFor = Date.now() - lastActivity;
+          if (latest.busy) announce(true);
+          if (elapsed >= limits.maxSettleMs) break;
+          if (latest.busy) continue;
+          if (quietFor < limits.quietMs) continue;
+          if (grewDuringWait) break;
+          if (elapsed >= limits.minObserveMs) break;
+        }
+      } finally {
+        observer.disconnect();
+      }
+
+      const quietFor = Date.now() - lastActivity;
+      return {
+        postIds: collectFeedPostIds(),
+        postCardCount: latest.postCardCount,
+        hasLoadMore: latest.hasLoadMore,
+        busy: !!(latest.busy || quietFor < limits.quietMs)
+      };
+    }
+
+    async function autoLoadAllPosts() {
+      const Feed = globalThis.FeedAutoLoad;
+      const limits = Feed.LIMITS;
+      const net = watchFeedResources();
+      let state = Feed.notePosts(Feed.initialState(), collectFeedPostIds(), feedPostCards().length);
+      let lastReportAt = 0;
+      let lastReportText = '';
+
+      function announce(extraBusy) {
+        const ids = collectFeedPostIds();
+        const cards = feedPostCards().length;
+        const count = Feed.foundCount(state, ids, cards);
+        const busy = !!(extraBusy || state.loading);
+        const text = busy
+          ? `正在自動展開貼文 (已找到 ${count} 篇，貼文仍在載入)...`
+          : `正在自動展開貼文 (已找到 ${count} 篇)...`;
+        const now = Date.now();
+        if (text === lastReportText && now - lastReportAt < 2000) return;
+        lastReportText = text;
+        lastReportAt = now;
+        reportStatus(text);
+      }
+
+      try {
+        while (!state.done && state.loops < limits.maxLoops) {
+          announce(false);
+          await scrollFeedToEnd();
+          if (state.action === 'click') {
+            const control = scanFeedTail().loadMoreEl;
+            if (control) control.click();
+          }
+          const observation = await waitForFeedSettle(net, announce);
+          state = Feed.decide(state, observation);
+        }
+      } finally {
+        net.disconnect();
+      }
+
+      const count = Feed.foundCount(state, collectFeedPostIds(), feedPostCards().length);
+      if (!state.done) {
+        reportStatus(`貼文展開已達上限 (已找到 ${count} 篇)，繼續獲取目前貼文...`);
+      } else {
+        reportStatus(`貼文已全部展開 (共 ${count} 篇)`);
       }
     }
 
     const storageData = await new Promise(resolve => chrome.storage.local.get(['autoLoad'], resolve));
     if (!isSinglePostPage && storageData && storageData.autoLoad) {
-      await autoLoadAllPosts();
+      if (!globalThis.FeedAutoLoad) {
+        reportStatus('自動展開元件未載入，改為掃瞄目前畫面上的貼文。');
+      } else {
+        try {
+          await autoLoadAllPosts();
+        } catch (e) {
+          console.warn('Auto-load failed:', e);
+          reportStatus('自動展開中斷，改為掃瞄目前畫面上的貼文...');
+        }
+      }
     }
 
     // -------------------------------------------------------------

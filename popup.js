@@ -222,8 +222,8 @@ scanBtn.addEventListener('click', async () => {
     await chrome.storage.local.set({ autoLoad: autoLoadCb.checked });
 
     // Inject the scanner; content.js sends 'SCAN_COMPLETE' when done.
-    // Patreon keeps the original single-file injection.
-    const files = kind === 'fantia' ? ['fantia.js', 'content.js'] : ['content.js'];
+    // feed-autoload.js decides when a Patreon feed has actually finished.
+    const files = kind === 'fantia' ? ['fantia.js', 'content.js'] : ['feed-autoload.js', 'content.js'];
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: files
