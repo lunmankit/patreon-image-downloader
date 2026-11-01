@@ -1,6 +1,6 @@
 # Patreon & Fantia Image Batch Downloader
 
-Manifest V3 extension (v1.8) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts and from Fantia posts the current browser session can already see.
+Manifest V3 extension (v1.9) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts, from Fantia posts the current browser session can already see, and from other gallery pages where a thumbnail opens the original photo in a new tab.
 
 On a supported page, open the popup and scan. The extension collects images (preferring original / download URLs), shows a preview, and can filter by minimum width or height. Optional auto-load scrolls Patreon feeds, and on Fantia it follows listing pagination, before the scan. Patreon downloads are saved under `Patreon_Downloads/`. Fantia downloads are saved under `Fantia_Downloads/`.
 
@@ -18,7 +18,17 @@ Auto mode shortens an over-long title and shows the shortened folder before down
 
 The popup UI is in Traditional Chinese.
 
-Chrome and Firefox need separate manifests. Chrome Manifest V3 loads `background.service_worker`. `background.scripts` is a Manifest V2 key, and Chrome reports `'background.scripts' requires manifest version of 2 or lower.` when that key is rejected. Firefox desktop release builds start `background.js` as an event page from `background.scripts` and do not support `background.service_worker` ([Firefox bug 1573659](https://bugzilla.mozilla.org/show_bug.cgi?id=1573659)).
+## Other gallery pages
+
+On a page that is not Patreon or Fantia, **掃瞄頁面圖片** looks for thumbnail controls that open another URL in a new tab: an `<a target="_blank">` around a thumbnail, or an inline `onclick` that calls `window.open("...")`. The first time you scan a given site, the extension asks for that origin only (`optional_host_permissions` plus `permissions.request`). It does not request access to every site at install.
+
+The download target is the URL that would open, not the thumbnail file. A direct image URL (file extension, or a known image-CDN pattern such as `format=jpg` on an image host) is queued. A link that opens an HTML page, a video, an archive, an ad, or any other non-image document is not saved as a picture. If that page's response is `image/*`, or the HTML clearly contains one photo, that photo URL is queued instead of the page. A page with several photos, or a page we cannot read, is skipped. The scan does not open a visible tab per thumbnail. If a site only reveals the file URL after client-side navigation, that thumbnail is skipped.
+
+The same folder and minimum-size controls apply. Files go under `Gallery_Downloads/`. The toolbar icon stays idle on these pages; Patreon and Fantia are still the only hosts marked supported. Auto-scroll applies only to Patreon and Fantia.
+
+One checked example is `https://www.smlsy.com/video_detail.php?id=405258`. Each preview is a `div.preview-picture` whose `onclick` is `window.open` of a `.jpeg`. The `<img>` `src` is a `/mip/` thumbnail and `data-org` repeats the original file. Those originals are downloaded. Links on the same page that open another web page, an app, or a non-image file are not.
+
+Chrome and Firefox need separate manifests. Chrome Manifest V3 loads `background.service_worker`. `background.scripts` is a Manifest V2 key, and Chrome reports `'background.scripts' requires manifest version of 2 or lower.` when that key is rejected. Firefox desktop release builds start an event page from `background.scripts` (`gallery-scan.js`, then `background.js`) and do not support `background.service_worker` ([Firefox bug 1573659](https://bugzilla.mozilla.org/show_bug.cgi?id=1573659)).
 
 `manifest.json` is what Chrome loads. `manifest.firefox.json` is the same manifest with `background.scripts` instead of `background.service_worker`. Firefox's temporary add-on loader reads a file named `manifest.json`, so stage `dist/firefox` before loading there. Both browsers run the same `background.js`. Scripts call `chrome.*`, which Firefox implements for these APIs. Current Chrome leaves `browser_specific_settings` unused.
 
@@ -71,7 +81,7 @@ From the repo root, stage a folder whose manifest is named `manifest.json` and u
 python3 scripts/stage-firefox.py
 ```
 
-The script checks that `manifest.json` and `manifest.firefox.json` match except for `background`, then writes `dist/firefox/` (`dist/` is gitignored), including `fantia.js` and `download-path.js`.
+The script checks that `manifest.json` and `manifest.firefox.json` match except for `background`, then writes `dist/firefox/` (`dist/` is gitignored), including `fantia.js`, `download-path.js`, `gallery-scan.js`, and `gallery-content.js`. Firefox's event page loads `gallery-scan.js` before `background.js`. Chrome's service worker imports that same file.
 
 1. Open `about:debugging`.
 2. In the left sidebar, click **This Firefox**.
@@ -92,6 +102,7 @@ Packaging and signing for addons.mozilla.org is out of scope. `manifest.firefox.
 | `storage` | Remember auto-load, the folder naming mode, and the last custom folder name. |
 | `tabs` | Read the active tab URL so the toolbar icon can switch between idle and supported. |
 | `https://patreon.com/*`, `https://*.patreon.com/*` | Run on Patreon and request post media from the page. |
-| `https://fantia.jp/*`, `https://*.fantia.jp/*` | Run on Fantia, including `www`, and download images from `c.fantia.jp` and `cc.fantia.jp`. No other hosts are added. |
+| `https://fantia.jp/*`, `https://*.fantia.jp/*` | Run on Fantia, including `www`, and download images from `c.fantia.jp` and `cc.fantia.jp`. |
+| Optional `https://*/*` and `http://*/*` | Not granted at install. The first generic gallery scan on a site asks for that origin so the extension can read the page and check links that open an HTML document. Patreon and Fantia keep their install-time host permissions and do not use this prompt. |
 
 Scanning stays on demand, the same as Patreon. The extension does not register a content script that runs on every page load.
