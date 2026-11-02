@@ -112,7 +112,7 @@ chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
   autoLoadCb.disabled = kind === 'generic';
   if (autoLoadRow) {
     autoLoadRow.classList.toggle('disabled', kind === 'generic');
-    autoLoadRow.title = kind === 'generic' ? '一般圖庫只掃瞄目前頁面的縮圖連結' : '';
+    autoLoadRow.title = kind === 'generic' ? '一般圖庫只掃瞄目前頁面，不會自動翻頁' : '';
   }
   const supported = kind === 'patreon' || kind === 'fantia';
   updateFolderUi();
