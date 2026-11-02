@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Patreon & Fantia Image Batch Downloader",
-  "version": "1.9",
-  "description": "Batch extract and download high-resolution images from Patreon and Fantia posts, and originals from gallery pages that open a photo in a new tab.",
+  "version": "1.10",
+  "description": "Batch extract and download high-resolution images from Patreon and Fantia posts, and originals from other gallery pages.",
   "browser_specific_settings": {
     "gecko": {
       "id": "patreon-image-downloader@lunmankit.github.io",

@@ -1,7 +1,8 @@
-// Runs in the gallery tab. Finds thumbnail controls that open a new tab,
-// keeps direct image URLs, and asks the background worker to probe pages.
-// Does not call window.open and does not create visible tabs. A page whose
-// photo URL appears only after a client-side navigation is skipped.
+// Runs in the gallery tab. Finds thumbnail controls and full-size URLs
+// already in the DOM, keeps direct image URLs, and asks the background
+// worker to probe pages that might be a single photo. Does not call
+// window.open and does not create visible tabs. A page whose photo URL
+// appears only after a client-side navigation is skipped.
 (async () => {
   function send(msg) {
     try {
@@ -58,7 +59,7 @@
       };
       timer = setTimeout(() => {
         finish({ ok: false, images: [], skipped: urls.length, pendingUrls: [] });
-      }, 25000);
+      }, 14000);
       try {
         chrome.runtime.sendMessage({ type: 'GALLERY_PROBE_PAGES', urls: urls }, (response) => {
           let failed = false;
@@ -75,6 +76,30 @@
     });
   }
 
+  async function probeInChunks(scan, urls) {
+    const images = [];
+    const pendingUrls = [];
+    let skipped = 0;
+    const seen = {};
+    const chunkSize = 4;
+    for (let i = 0; i < urls.length; i += chunkSize) {
+      const end = Math.min(i + chunkSize, urls.length);
+      report('正在確認網頁連結 ' + (i + 1) + '-' + end + ' / ' + urls.length + '...');
+      const part = await probeUrls(urls.slice(i, i + chunkSize));
+      const found = part && part.images ? part.images : [];
+      for (let j = 0; j < found.length; j++) {
+        const key = scan.canonical(found[j]);
+        if (!key || seen[key]) continue;
+        seen[key] = true;
+        images.push(found[j]);
+      }
+      skipped += part && part.skipped ? part.skipped : 0;
+      const pending = part && part.pendingUrls ? part.pendingUrls : [];
+      for (let j = 0; j < pending.length; j++) pendingUrls.push(pending[j]);
+    }
+    return { images: images, skipped: skipped, pendingUrls: pendingUrls };
+  }
+
   try {
     const scan = globalThis.GalleryScan;
     if (!scan || typeof scan.collectOpeners !== 'function') {
@@ -89,13 +114,12 @@
       return;
     }
 
-    report('正在掃瞄縮圖連結...');
+    report('正在掃瞄縮圖與原圖...');
     const openers = scan.collectOpeners(document);
     const resolved = scan.resolveOpeners(openers, location.href);
     let probe = { images: [], skipped: 0, pendingUrls: [] };
     if (resolved.probes.length) {
-      report('正在確認 ' + resolved.probes.length + ' 個網頁連結是不是單張原圖...');
-      probe = await probeUrls(resolved.probes);
+      probe = await probeInChunks(scan, resolved.probes);
     }
 
     const title = document.title ? String(document.title).trim() : '';
@@ -113,8 +137,9 @@
     scan.uniqueFilenames(records);
 
     if (records.length) {
-      report('正在讀取 ' + records.length + ' 張圖片的尺寸...');
+      report('正在讀取圖片尺寸 0 / ' + records.length + '...');
       const batch = 4;
+      let sized = 0;
       for (let i = 0; i < records.length; i += batch) {
         const slice = records.slice(i, i + batch);
         await mapPool(slice, batch, async (item) => {
@@ -122,12 +147,14 @@
           item.width = dims.width || 0;
           item.height = dims.height || 0;
         });
+        sized += slice.length;
+        report('正在讀取圖片尺寸 ' + sized + ' / ' + records.length + '...');
       }
     }
 
     const skipped = (resolved.skipped || 0) + (probe.skipped || 0);
     const pendingUrls = probe.pendingUrls || [];
-    const notice = scan.summaryNotice(skipped, pendingUrls.length);
+    const notice = scan.summaryNotice(skipped, pendingUrls.length, resolved.thumbs || 0);
     const stored = {
       pageUrl: location.href,
       at: Date.now(),

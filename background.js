@@ -178,6 +178,59 @@ async function probeGalleryPages(urls) {
   skipped += requested.length - batch.length;
   const imageSeen = {};
 
+  function fetchTimed(url, method, ms) {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = setTimeout(() => {
+      if (controller) {
+        try { controller.abort(); } catch (e) {}
+      }
+    }, ms);
+    return fetch(url, {
+      method: method,
+      redirect: 'follow',
+      credentials: 'include',
+      signal: controller ? controller.signal : undefined,
+      headers: { 'Accept': 'image/avif,image/webp,image/*,text/html;q=0.8,*/*;q=0.1' }
+    }).finally(() => clearTimeout(timer));
+  }
+
+  async function readLimited(res, max) {
+    if (res.body && typeof res.body.getReader === 'function') {
+      const reader = res.body.getReader();
+      const chunks = [];
+      let total = 0;
+      try {
+        while (total < max) {
+          const step = await reader.read();
+          if (step.done) break;
+          const buf = step.value;
+          chunks.push(buf);
+          total += buf && buf.byteLength ? buf.byteLength : 0;
+        }
+      } finally {
+        try { await reader.cancel(); } catch (e) {}
+      }
+      const decoder = typeof TextDecoder === 'function' ? new TextDecoder() : null;
+      let text = '';
+      for (let i = 0; i < chunks.length; i++) {
+        text += decoder ? decoder.decode(chunks[i], { stream: true }) : String(chunks[i] || '');
+        if (text.length >= max) return text.slice(0, max);
+      }
+      return text;
+    }
+    const text = await res.text();
+    return text.length > max ? text.slice(0, max) : text;
+  }
+
+  function remember(decision) {
+    if (decision && decision.status === 'image' && decision.url && !imageSeen[scan.canonical(decision.url)]) {
+      imageSeen[scan.canonical(decision.url)] = true;
+      images.push(decision.url);
+      return;
+    }
+    skipped += 1;
+  }
+
   async function probeOne(url) {
     const pattern = scan.originMatchPattern(url);
     const allowed = await containsOrigin(pattern);
@@ -185,49 +238,79 @@ async function probeGalleryPages(urls) {
       pendingUrls.push(url);
       return;
     }
-    let signal;
+    let headStatus = 0;
+    let headType = '';
+    let headFinal = url;
     try {
-      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
-        signal = AbortSignal.timeout(12000);
+      const head = await fetchTimed(url, 'HEAD', 3000);
+      headStatus = head.status;
+      headType = head.headers.get('content-type') || '';
+      headFinal = head.url || url;
+      if (head.body && typeof head.body.cancel === 'function') {
+        try { head.body.cancel(); } catch (e) {}
       }
-    } catch (e) {}
-    const res = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-      credentials: 'include',
-      signal: signal,
-      headers: { 'Accept': 'image/avif,image/webp,image/*,text/html;q=0.8,*/*;q=0.1' }
-    });
-    const contentType = res.headers.get('content-type') || '';
-    const mime = contentType.split(';')[0].trim().toLowerCase();
-    let html = '';
-    if (mime.indexOf('image/') !== 0) {
-      const text = await res.text();
-      html = text.length > 800000 ? text.slice(0, 800000) : text;
-    } else if (res.body && typeof res.body.cancel === 'function') {
-      try { res.body.cancel(); } catch (e) {}
+    } catch (e) {
+      headStatus = 0;
     }
-    if (!res.ok && mime.indexOf('image/') !== 0) {
+    const step = typeof scan.interpretHead === 'function'
+      ? scan.interpretHead(headStatus, headType)
+      : 'get';
+    if (step === 'accept') {
+      remember(scan.decideProbe({
+        url: url,
+        finalUrl: headFinal,
+        contentType: headType,
+        html: ''
+      }));
+      return;
+    }
+    if (step === 'skip') {
       skipped += 1;
       return;
     }
-    const decision = scan.decideProbe({
+    let res;
+    try {
+      res = await fetchTimed(url, 'GET', 6000);
+    } catch (e) {
+      skipped += 1;
+      return;
+    }
+    const contentType = res.headers.get('content-type') || '';
+    const mime = contentType.split(';')[0].trim().toLowerCase();
+    const htmlLike = !mime || mime === 'text/html' || mime === 'application/xhtml+xml' || mime === 'text/xml' || mime === 'application/xml' || mime.indexOf('text/') === 0;
+    let html = '';
+    if (mime.indexOf('image/') === 0) {
+      if (res.body && typeof res.body.cancel === 'function') {
+        try { res.body.cancel(); } catch (e) {}
+      }
+    } else if (!res.ok || !htmlLike) {
+      skipped += 1;
+      if (res.body && typeof res.body.cancel === 'function') {
+        try { res.body.cancel(); } catch (e) {}
+      }
+      return;
+    } else {
+      const length = parseInt(res.headers.get('content-length') || '', 10);
+      if (length > 2000000) {
+        skipped += 1;
+        if (res.body && typeof res.body.cancel === 'function') {
+          try { res.body.cancel(); } catch (e) {}
+        }
+        return;
+      }
+      html = await readLimited(res, 800000);
+    }
+    remember(scan.decideProbe({
       url: url,
       finalUrl: res.url || url,
       contentType: contentType,
       html: html
-    });
-    if (decision.status === 'image' && decision.url && !imageSeen[scan.canonical(decision.url)]) {
-      imageSeen[scan.canonical(decision.url)] = true;
-      images.push(decision.url);
-    } else {
-      skipped += 1;
-    }
+    }));
   }
 
   let cursor = 0;
   const runners = [];
-  const pool = Math.min(3, batch.length);
+  const pool = Math.min(4, batch.length);
   for (let i = 0; i < pool; i++) {
     runners.push((async () => {
       while (cursor < batch.length) {

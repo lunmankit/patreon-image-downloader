@@ -1,6 +1,6 @@
 # Patreon & Fantia Image Batch Downloader
 
-Manifest V3 extension (v1.9) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts, from Fantia posts the current browser session can already see, and from other gallery pages where a thumbnail opens the original photo in a new tab.
+Manifest V3 extension (v1.10) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts, from Fantia posts the current browser session can already see, and from other gallery pages whose thumbnails point at an original photo.
 
 On a supported page, open the popup and scan. The extension collects images (preferring original / download URLs), shows a preview, and can filter by minimum width or height. Optional auto-load scrolls Patreon feeds, and on Fantia it follows listing pagination, before the scan. Patreon downloads are saved under `Patreon_Downloads/`. Fantia downloads are saved under `Fantia_Downloads/`.
 
@@ -20,9 +20,19 @@ The popup UI is in Traditional Chinese.
 
 ## Other gallery pages
 
-On a page that is not Patreon or Fantia, **掃瞄頁面圖片** looks for thumbnail controls that open another URL in a new tab: an `<a target="_blank">` around a thumbnail, or an inline `onclick` that calls `window.open("...")`. The first time you scan a given site, the extension asks for that origin only (`optional_host_permissions` plus `permissions.request`). It does not request access to every site at install.
+On a page that is not Patreon or Fantia, **掃瞄頁面圖片** looks for thumbnail controls and for full-size URLs already present in the page. The first time you scan a given site, the extension asks for that origin only (`optional_host_permissions` plus `permissions.request`). It does not request access to every site at install, and it does not keep a list of supported gallery hosts.
 
-The download target is the URL that would open, not the thumbnail file. A direct image URL (file extension, or a known image-CDN pattern such as `format=jpg` on an image host) is queued. A link that opens an HTML page, a video, an archive, an ad, or any other non-image document is not saved as a picture. If that page's response is `image/*`, or the HTML clearly contains one photo, that photo URL is queued instead of the page. A page with several photos, or a page we cannot read, is skipped. The scan does not open a visible tab per thumbnail. If a site only reveals the file URL after client-side navigation, that thumbnail is skipped.
+Controls it understands:
+
+- An `<a target="_blank">` around a thumbnail, or an inline `onclick` that calls `window.open("...")`.
+- A lightbox-style anchor (`data-lightbox`, `data-fancybox`, `data-gallery`, `rel="lightbox"`, or a gallery/lightbox class) even when it stays in the same tab.
+- An anchor whose `href` is an image file, including a CDN host that is different from the page.
+- An image-only anchor (a thumbnail with no heading or paragraph) that points at a viewer page.
+- Full-size attributes on the thumb or its wrapper: `data-org`, `data-original`, `data-full`, `data-full-url`, `data-hires`, `data-zoom-url`, and the same family (`data-large`, `data-hd`, `data-download-url`).
+- The largest `srcset` / `data-srcset` candidate, and lazy URLs (`data-src`, `data-lazy-src`) when the current `src` is a placeholder or a thumb.
+- A plain grid of four or more content images, a container whose class or id marks it as a gallery, or a detail page with a single content image.
+
+The download target is the original URL, not the thumbnail file. A direct image URL (file extension, or a known image-CDN pattern such as `format=jpg` on an image host) is queued. Paths and query sizes that look like thumbs (`/mip/`, `/thumb/`, `?w=200`, Cloudinary `w_200`) lose to an explicit original or a wider srcset candidate. A link that opens an HTML page, a video, an archive, an ad, or any other non-image document is not saved as a picture. If that page's response is `image/*`, or the HTML clearly contains one photo, that photo URL is queued instead of the page. A page with several photos, or a page we cannot read, is skipped. The scan does not open a visible tab per thumbnail. Probes use a short HEAD request and fall back to GET, a few at a time, so one dead link does not stall the rest. If a site only reveals the file URL after client-side navigation, that thumbnail is skipped.
 
 The same folder and minimum-size controls apply. Files go under `Gallery_Downloads/`. The toolbar icon stays idle on these pages; Patreon and Fantia are still the only hosts marked supported. Auto-scroll applies only to Patreon and Fantia.
 

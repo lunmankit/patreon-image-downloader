@@ -210,14 +210,11 @@ function matches(node, selector) {
 }
 
 function matchesOne(node, selector) {
-  if (selector === 'img') return node.tagName === 'IMG';
-  if (selector === 'header' || selector === 'footer' || selector === 'nav') {
-    return node.tagName === selector.toUpperCase();
-  }
   if (selector === 'a[href]') return node.tagName === 'A' && !!node.getAttribute('href');
   if (selector === '[onclick]') return !!node.getAttribute('onclick');
   const role = /^\[role="([^"]+)"\]$/.exec(selector);
   if (role) return node.getAttribute('role') === role[1];
+  if (/^[a-z][a-z0-9]*$/i.test(selector)) return node.tagName === selector.toUpperCase();
   return false;
 }
 
@@ -255,10 +252,225 @@ found.images.forEach((url) => {
   assert.ok(!/\.(php|html|apk)(\?|$)/.test(url));
 });
 
+const sized = Scan.parseSrcset('https://cdn.example/a-200.jpg 200w, https://cdn.example/a-1600.jpg 1600w');
+assert.strictEqual(sized.length, 2);
+assert.strictEqual(sized[0].width, 200);
+assert.strictEqual(sized[1].width, 1600);
+assert.strictEqual(sized[1].url, 'https://cdn.example/a-1600.jpg');
+
+const srcsetChoice = Scan.resolveOpener({
+  hasThumb: true,
+  targetUrls: ['https://gallery.example/view/9'],
+  srcset: [
+    { url: 'https://cdn.example/p9-320.jpg', width: 320 },
+    { url: 'https://cdn.example/p9-1600.jpg', width: 1600 }
+  ]
+}, 'https://gallery.example/set');
+assert.strictEqual(srcsetChoice.status, 'image');
+assert.strictEqual(srcsetChoice.url, 'https://cdn.example/p9-1600.jpg');
+
+const onlySmall = Scan.resolveOpener({
+  hasThumb: true,
+  targetUrls: ['https://gallery.example/view/9'],
+  srcset: [{ url: 'https://cdn.example/p9-320.jpg', width: 320 }]
+}, 'https://gallery.example/set');
+assert.strictEqual(onlySmall.status, 'probe');
+
+const lazyFull = Scan.resolveOpener({
+  hasThumb: true,
+  targetUrls: ['https://photos.example/view.php?id=3'],
+  lazyUrls: ['https://cdn.example/uploads/3.jpg']
+}, 'https://photos.example/album');
+assert.strictEqual(lazyFull.status, 'image');
+assert.strictEqual(lazyFull.url, 'https://cdn.example/uploads/3.jpg');
+
+const lazyThumb = Scan.resolveOpener({
+  hasThumb: true,
+  targetUrls: ['https://photos.example/view.php?id=3'],
+  lazyUrls: ['https://photos.example/thumbs/3.jpg']
+}, 'https://photos.example/album');
+assert.strictEqual(lazyThumb.status, 'probe');
+
+const cloudinary = Scan.resolveOpener({
+  hasThumb: true,
+  targetUrls: ['https://res.cloudinary.com/demo/image/upload/c_fill,w_240/sample.jpg'],
+  originalUrls: ['https://res.cloudinary.com/demo/image/upload/sample.jpg']
+}, page);
+assert.strictEqual(cloudinary.status, 'image');
+assert.strictEqual(cloudinary.url, 'https://res.cloudinary.com/demo/image/upload/sample.jpg');
+
+const samePage = Scan.resolveOpener({
+  hasThumb: true,
+  targetUrls: [page + '#top']
+}, page);
+assert.strictEqual(samePage.status, 'skip');
+
+const nested = el('div', {}, [
+  el('div', { onclick: 'window.open("https://cdn.example/nested/full.jpg")' }, [
+    el('a', { href: 'https://cdn.example/nested/thumb.jpg' }, [
+      el('img', { src: 'https://cdn.example/nested/thumb.jpg' })
+    ])
+  ])
+]);
+const nestedFound = Scan.resolveOpeners(Scan.collectOpeners(nested), page);
+same(nestedFound.images, ['https://cdn.example/nested/full.jpg']);
+
+const namedThumb = Scan.resolveOpener({
+  hasThumb: true,
+  targetUrls: ['https://cdn.example/images/thumb.jpg']
+}, page);
+assert.strictEqual(namedThumb.status, 'image');
+assert.strictEqual(namedThumb.url, 'https://cdn.example/images/thumb.jpg');
+
+const namedThumbPage = Scan.resolveOpener({
+  hasThumb: true,
+  targetUrls: ['https://photos.example/view/9'],
+  lazyUrls: ['https://cdn.example/images/thumb.jpg']
+}, 'https://photos.example/a');
+assert.strictEqual(namedThumbPage.status, 'probe');
+
+const srcsetHtml = '<html><body><img src="https://cdn.example/thumb.jpg" srcset="https://cdn.example/thumb.jpg 200w, https://cdn.example/large.jpg 1600w" data-original="https://cdn.example/original.jpg"></body></html>';
+assert.strictEqual(Scan.extractSinglePhoto(srcsetHtml, viewerPage), 'https://cdn.example/original.jpg');
+
+const resizedOriginal = '<html><body><img src="https://cdn.example/thumb.jpg" data-full="https://cdn.example/full.jpg?w=200" srcset="https://cdn.example/full.jpg 1600w"></body></html>';
+assert.strictEqual(Scan.extractSinglePhoto(resizedOriginal, viewerPage), 'https://cdn.example/full.jpg');
+
+assert.strictEqual(Scan.interpretHead(200, 'image/jpeg'), 'accept');
+assert.strictEqual(Scan.interpretHead(200, 'text/html; charset=utf-8'), 'get');
+assert.strictEqual(Scan.interpretHead(405, ''), 'get');
+assert.strictEqual(Scan.interpretHead(403, 'text/html'), 'get');
+assert.strictEqual(Scan.interpretHead(404, 'text/html'), 'skip');
+assert.strictEqual(Scan.interpretHead(200, 'application/pdf'), 'skip');
+assert.strictEqual(Scan.interpretHead(200, 'video/mp4'), 'skip');
+assert.strictEqual(Scan.interpretHead(200, ''), 'get');
+assert.strictEqual(Scan.interpretHead(0, ''), 'get');
+
+const lightbox = el('div', { class: 'gallery' }, [
+  el('a', { href: 'https://cdn.example/photos/full.jpg', 'data-lightbox': 'g' }, [
+    el('img', { src: 'https://cdn.example/photos/thumb.jpg' })
+  ]),
+  el('a', { href: 'https://images.example-cdn.com/uploads/pic.webp', 'data-fancybox': 'gallery' }, [
+    el('img', { src: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=', 'data-src': 'https://images.example-cdn.com/thumbs/pic.webp' })
+  ]),
+  el('a', { href: '#', 'data-src': 'https://cdn.example/wrap/original.png' }, [
+    el('img', { src: 'https://cdn.example/wrap/thumb.png' })
+  ])
+]);
+const lightFound = Scan.resolveOpeners(Scan.collectOpeners(lightbox), 'https://gallery.example/set');
+same(lightFound.images, [
+  'https://cdn.example/photos/full.jpg',
+  'https://images.example-cdn.com/uploads/pic.webp',
+  'https://cdn.example/wrap/original.png'
+]);
+assert.strictEqual(lightFound.probes.length, 0);
+lightFound.images.forEach((url) => {
+  assert.ok(url.indexOf('/thumb') === -1);
+});
+
+const grid = el('div', { class: 'image-grid' }, [
+  el('img', { src: 'https://cdn.example/grid/a.jpg', srcset: 'https://cdn.example/grid/a-300.jpg 300w, https://cdn.example/grid/a-1600.jpg 1600w' }),
+  el('img', { src: 'https://cdn.example/grid/b-thumb.jpg', 'data-original': 'https://cdn.example/grid/b.jpg' }),
+  el('picture', {}, [
+    el('source', { srcset: 'https://cdn.example/grid/c.avif 1400w' }),
+    el('img', { src: 'https://cdn.example/grid/c-thumb.jpg' })
+  ]),
+  el('img', { src: 'https://cdn.example/grid/d-thumb.jpg' })
+]);
+const gridFound = Scan.resolveOpeners(Scan.collectOpeners(grid), 'https://gallery.example/grid');
+same(gridFound.images, [
+  'https://cdn.example/grid/a-1600.jpg',
+  'https://cdn.example/grid/b.jpg',
+  'https://cdn.example/grid/c.avif'
+]);
+assert.ok(gridFound.thumbs >= 1);
+gridFound.images.forEach((url) => assert.ok(url.indexOf('thumb') === -1));
+
+const cards = el('main', {}, [
+  el('a', { href: 'https://news.example/story/1' }, [
+    el('img', { src: 'https://news.example/media/story1.jpg' }),
+    el('h2', {}, [])
+  ]),
+  el('a', { href: 'https://news.example/story/2' }, [
+    el('img', { src: 'https://news.example/media/story2.jpg' }),
+    el('p', {}, [])
+  ]),
+  el('a', { href: 'https://news.example/list?page=2' }, [
+    el('img', { src: 'https://news.example/images/next.png' })
+  ])
+]);
+const cardFound = Scan.resolveOpeners(Scan.collectOpeners(cards), 'https://news.example/');
+same(cardFound.images, []);
+same(cardFound.probes, []);
+
+const viewers = el('ul', { class: 'thumbnails' }, [
+  el('li', {}, [el('a', { href: 'https://photos.example/view/1' }, [el('img', { src: 'https://photos.example/thumbs/1.jpg' })])]),
+  el('li', {}, [el('a', { href: 'https://photos.example/view/2' }, [el('img', { src: 'https://photos.example/thumbs/2.jpg' })])]),
+  el('li', {}, [el('a', { href: 'https://photos.example/clip.mp4' }, [el('img', { src: 'https://photos.example/thumbs/3.jpg' })])]),
+  el('li', {}, [el('a', { href: 'https://photos.example/pack.zip' }, [el('img', { src: 'https://photos.example/thumbs/4.jpg' })])])
+]);
+const viewerFound = Scan.resolveOpeners(Scan.collectOpeners(viewers), 'https://photos.example/album');
+same(viewerFound.probes, ['https://photos.example/view/1', 'https://photos.example/view/2']);
+same(viewerFound.images, []);
+assert.strictEqual(viewerFound.skipped, 2);
+
+const plainGrid = el('div', {}, [
+  el('img', { src: 'https://cdn.example/plain/01.jpg' }),
+  el('img', { src: 'https://cdn.example/plain/02.jpg' }),
+  el('img', { src: 'https://cdn.example/plain/03.jpg' }),
+  el('img', { src: 'https://cdn.example/plain/04-thumb.jpg' })
+]);
+const plainFound = Scan.resolveOpeners(Scan.collectOpeners(plainGrid), 'https://gallery.example/plain');
+same(plainFound.images, [
+  'https://cdn.example/plain/01.jpg',
+  'https://cdn.example/plain/02.jpg',
+  'https://cdn.example/plain/03.jpg'
+]);
+assert.ok(plainFound.thumbs >= 1);
+
+const lazyOne = el('div', {}, [
+  el('img', {
+    src: 'data:image/gif;base64,R0lGODlhAQABAAAAACw=',
+    'data-src': 'https://cdn.example/lazy/full.jpg'
+  })
+]);
+const lazyFound = Scan.resolveOpeners(Scan.collectOpeners(lazyOne), 'https://gallery.example/lazy');
+same(lazyFound.images, ['https://cdn.example/lazy/full.jpg']);
+
+const cdnLink = el('div', {}, [
+  el('a', { href: 'https://images.example-cdn.com/uploads/pic.jpeg' }, [
+    el('img', { src: '/thumbs/pic.jpg' })
+  ])
+]);
+const cdnFound = Scan.resolveOpeners(Scan.collectOpeners(cdnLink), 'https://site.example/g');
+same(cdnFound.images, ['https://images.example-cdn.com/uploads/pic.jpeg']);
+assert.ok(cdnFound.images[0].indexOf('/thumbs/') === -1);
+
+const detail = el('article', {}, [
+  el('img', { src: 'https://cdn.example/posts/only.jpg', width: '1600', height: '900' })
+]);
+const detailFound = Scan.resolveOpeners(Scan.collectOpeners(detail), 'https://blog.example/posts/1');
+same(detailFound.images, ['https://cdn.example/posts/only.jpg']);
+
+const wrapped = el('div', { 'data-full': 'https://cdn.example/wrapped/full.jpg' }, [
+  el('img', { src: 'https://cdn.example/wrapped/small.jpg', 'data-src': 'https://cdn.example/wrapped/small.jpg' })
+]);
+const wrappedFound = Scan.resolveOpeners(Scan.collectOpeners(wrapped), 'https://gallery.example/one');
+same(wrappedFound.images, ['https://cdn.example/wrapped/full.jpg']);
+
+assert.ok(Scan.summaryNotice(1, 2, 3).indexOf('只有縮圖') !== -1);
+assert.ok(Scan.summaryNotice(1, 2, 3).indexOf('需要授權') !== -1);
+
+const contentJs = fs.readFileSync(path.join(root, 'gallery-content.js'), 'utf8');
+const backgroundJs = fs.readFileSync(path.join(root, 'background.js'), 'utf8');
+assert.ok(contentJs.includes('正在確認網頁連結'));
+assert.ok(contentJs.includes('正在讀取圖片尺寸'));
+assert.ok(backgroundJs.includes('interpretHead'));
+assert.ok(backgroundJs.includes("'HEAD'"));
+
 const chromeManifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 const firefoxManifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.firefox.json'), 'utf8'));
-assert.strictEqual(chromeManifest.version, '1.9');
-assert.strictEqual(firefoxManifest.version, '1.9');
+assert.strictEqual(chromeManifest.version, '1.10');
+assert.strictEqual(firefoxManifest.version, '1.10');
 assert.deepStrictEqual(chromeManifest.optional_host_permissions, ['https://*/*', 'http://*/*']);
 assert.deepStrictEqual(firefoxManifest.optional_host_permissions, chromeManifest.optional_host_permissions);
 assert.deepStrictEqual(firefoxManifest.background.scripts, ['gallery-scan.js', 'background.js']);
@@ -281,7 +493,8 @@ assert.ok(stage.includes('gallery-scan.js'));
 assert.ok(stage.includes('gallery-content.js'));
 assert.ok(stage.includes('permission.html'));
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
-assert.ok(readme.includes('v1.9'));
+assert.ok(readme.includes('v1.10'));
+assert.ok(!readme.includes('v1.9'));
 assert.ok(!readme.includes('v1.8'));
 
 console.log('gallery-scan.test.js ok');
