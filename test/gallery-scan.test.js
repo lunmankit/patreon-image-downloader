@@ -469,8 +469,8 @@ assert.ok(backgroundJs.includes("'HEAD'"));
 
 const chromeManifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
 const firefoxManifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.firefox.json'), 'utf8'));
-assert.strictEqual(chromeManifest.version, '1.10');
-assert.strictEqual(firefoxManifest.version, '1.10');
+assert.strictEqual(chromeManifest.version, '1.11');
+assert.strictEqual(firefoxManifest.version, '1.11');
 assert.deepStrictEqual(chromeManifest.optional_host_permissions, ['https://*/*', 'http://*/*']);
 assert.deepStrictEqual(firefoxManifest.optional_host_permissions, chromeManifest.optional_host_permissions);
 assert.deepStrictEqual(firefoxManifest.background.scripts, ['gallery-scan.js', 'background.js']);
@@ -493,7 +493,8 @@ assert.ok(stage.includes('gallery-scan.js'));
 assert.ok(stage.includes('gallery-content.js'));
 assert.ok(stage.includes('permission.html'));
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
-assert.ok(readme.includes('v1.10'));
+assert.ok(readme.includes('v1.11'));
+assert.ok(!readme.includes('v1.10'));
 assert.ok(!readme.includes('v1.9'));
 assert.ok(!readme.includes('v1.8'));
 

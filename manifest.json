@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Patreon & Fantia Image Batch Downloader",
-  "version": "1.10",
+  "version": "1.11",
   "description": "Batch extract and download high-resolution images from Patreon and Fantia posts, and originals from other gallery pages.",
   "browser_specific_settings": {
     "gecko": {
