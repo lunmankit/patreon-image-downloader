@@ -261,12 +261,120 @@
     return found;
   }
 
+  // Patreon CDN paths name the post that owns the file:
+  // /p/post/<id>/<hash>/...
+  function postIdFromMediaUrl(url) {
+    const match = String(url || '').match(/\/p\/post\/(\d+)(?:\/|$)/i);
+    return match && match[1] ? match[1] : '';
+  }
+
+  function isNonPostCdn(url) {
+    return /\/p\/(?:campaign|user|creator|comment|reward)\//i.test(String(url || ''));
+  }
+
+  function mediaCandidateUrls(attrs) {
+    const source = attrs || {};
+    const urls = source.image_urls || {};
+    const display = source.display || {};
+    return [
+      urls.original,
+      source.download_url,
+      display.url,
+      urls.default_large,
+      urls.default,
+      urls.url,
+      source.url
+    ];
+  }
+
+  function referencedMediaIds(json) {
+    const ids = {};
+    let count = 0;
+    eachRelationshipId(json, function (id) {
+      if (ids[id]) return;
+      ids[id] = true;
+      count += 1;
+    });
+    const attributes = json && json.data && json.data.attributes ? json.data.attributes : {};
+    const postFile = attributes.post_file;
+    if (postFile && postFile.media_id != null && postFile.media_id !== '') {
+      const id = String(postFile.media_id);
+      if (!ids[id]) {
+        ids[id] = true;
+        count += 1;
+      }
+    }
+    return { ids: ids, count: count };
+  }
+
+  function mediaOwnedByOtherPost(attrs, postId) {
+    const source = attrs || {};
+    const ownerType = String(source.owner_type || '').toLowerCase();
+    const ownerId = source.owner_id != null && source.owner_id !== '' ? String(source.owner_id) : '';
+    return !!(ownerType === 'post' && ownerId && postId && ownerId !== String(postId));
+  }
+
+  // `included` on a post payload also carries sideloaded files (other posts,
+  // avatars, default includes). Only media this post references, or that
+  // names this post, is part of the post. A thumbnail-only include is still
+  // referenced, so the later /api/media fetch can upgrade it.
+  function includedItemInPost(item, postId, referenced) {
+    if (!item) return false;
+    const attrs = item.attributes || {};
+    const id = item.id != null && item.id !== '' ? String(item.id) : '';
+    const box = referenced || { ids: {}, count: 0 };
+    const urls = mediaCandidateUrls(attrs);
+    let urlOther = false;
+    let urlThis = false;
+    let nonPost = false;
+    for (let i = 0; i < urls.length; i++) {
+      if (!urls[i]) continue;
+      if (isNonPostCdn(urls[i])) nonPost = true;
+      const found = postIdFromMediaUrl(urls[i]);
+      if (found && postId && found !== String(postId)) urlOther = true;
+      if (found && postId && found === String(postId)) urlThis = true;
+    }
+    if (nonPost && !(id && box.ids[id])) return false;
+    if (mediaOwnedByOtherPost(attrs, postId)) return false;
+    if (urlOther && !urlThis && !(id && box.ids[id])) return false;
+    if (box.count > 0) {
+      if (id && box.ids[id]) return true;
+      if (urlThis) return true;
+      const ownerType = String(attrs.owner_type || '').toLowerCase();
+      const ownerId = attrs.owner_id != null && attrs.owner_id !== '' ? String(attrs.owner_id) : '';
+      if (ownerType === 'post' && ownerId && ownerId === String(postId)) return true;
+      return false;
+    }
+    return true;
+  }
+
+  // Which post a picture on the page belongs to. '' means skip it.
+  // On a post page, only that post. On a feed, only the card's own post,
+  // and a CDN url that names a different post does not inherit the card.
+  function scopeDomImage(info) {
+    const source = info || {};
+    const pagePostId = source.pagePostId ? String(source.pagePostId) : '';
+    const cardPostId = source.cardPostId ? String(source.cardPostId) : '';
+    const urlPostId = postIdFromMediaUrl(source.url);
+    if (source.inRecommendation || source.inComment || source.inOtherPost) return '';
+    if (urlPostId && cardPostId && urlPostId !== cardPostId) return '';
+    if (pagePostId) {
+      if (urlPostId && urlPostId !== pagePostId) return '';
+      if (cardPostId && cardPostId !== pagePostId) return '';
+      if (source.inCurrentPost || cardPostId === pagePostId || urlPostId === pagePostId) return pagePostId;
+      return '';
+    }
+    if (!cardPostId) return '';
+    return cardPostId;
+  }
+
   function collectPostImages(json) {
     const data = json && json.data ? json.data : {};
     const attributes = data.attributes || {};
     const postId = data.id != null && data.id !== '' ? String(data.id) : '';
     const postTitle = attributes.title || '';
     const postDate = attributes.published_at || attributes.created_at || '';
+    const referenced = referencedMediaIds(json);
     const images = [];
 
     function push(url, name, dims, mediaId) {
@@ -288,7 +396,7 @@
     const included = Array.isArray(json && json.included) ? json.included : [];
     for (let i = 0; i < included.length; i++) {
       const item = included[i];
-      if (!item) continue;
+      if (!item || !includedItemInPost(item, postId, referenced)) continue;
       const attrs = item.attributes || {};
       if (item.type === 'media') {
         const url = chooseImageUrl(attrs);
@@ -311,6 +419,9 @@
         const src = attrs.src || attrs.url || '';
         if (!src || !isPostImageUrl(src) && !imageExtension(src)) return;
         if (isSkippableUrl(src)) return;
+        if (isNonPostCdn(src)) return;
+        const urlPost = postIdFromMediaUrl(src);
+        if (urlPost && postId && urlPost !== postId) return;
         // Same file as an included original shares a hash; absorb keeps the
         // larger URL. Skipping here dropped the only copy when `included`
         // had a thumbnail for that id and the src was a better rendition,
@@ -324,13 +435,17 @@
 
     urlsFromHtml(attributes.content).forEach(function (src) {
       if (!isPostImageUrl(src) && !imageExtension(src)) return;
+      if (isNonPostCdn(src)) return;
+      const urlPost = postIdFromMediaUrl(src);
+      if (urlPost && postId && urlPost !== postId) return;
       push(src, '', { width: 0, height: 0 }, '');
     });
 
     const cover = attributes.image;
     if (cover && typeof cover === 'object') {
       const coverUrl = cover.large_url || cover.url || '';
-      if (coverUrl && !isSkippableUrl(coverUrl)) {
+      const coverPost = postIdFromMediaUrl(coverUrl);
+      if (coverUrl && !isSkippableUrl(coverUrl) && !isNonPostCdn(coverUrl) && !(coverPost && postId && coverPost !== postId)) {
         const dims = renditionRank(coverUrl) >= 90000
           ? { width: Number(cover.width) || 0, height: Number(cover.height) || 0 }
           : { width: 0, height: 0 };
@@ -340,12 +455,15 @@
 
     const postFile = attributes.post_file;
     if (postFile && postFile.url && isDownloadableImage(postFile, postFile.url)) {
-      push(
-        postFile.url,
-        postFile.name,
-        fullSizeDimensions(postFile, postFile.url),
-        postFile.media_id
-      );
+      const filePost = postIdFromMediaUrl(postFile.url);
+      if (!isNonPostCdn(postFile.url) && !(filePost && postId && filePost !== postId)) {
+        push(
+          postFile.url,
+          postFile.name,
+          fullSizeDimensions(postFile, postFile.url),
+          postFile.media_id
+        );
+      }
     }
 
     return images;
@@ -418,6 +536,8 @@
     isPostImageUrl: isPostImageUrl,
     isDownloadableImage: isDownloadableImage,
     chooseImageUrl: chooseImageUrl,
+    postIdFromMediaUrl: postIdFromMediaUrl,
+    scopeDomImage: scopeDomImage,
     createSeenImages: createSeenImages,
     rememberImages: rememberImages,
     absorbInto: absorbInto,

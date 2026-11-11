@@ -874,12 +874,28 @@
       });
     }
 
+    const postMeta = {};
+
+    function notePostMeta(postId, attributes) {
+      const id = postId ? String(postId) : '';
+      if (!id) return;
+      const source = attributes || {};
+      const previous = postMeta[id] || {};
+      const title = source.title || previous.title || '';
+      const date = source.published_at || source.created_at || previous.date || '';
+      postMeta[id] = { title: title, date: date };
+    }
+
     function pushCollected(item) {
       if (!item || !item.url || !globalThis.PatreonMedia) return;
+      const postId = item.postId ? String(item.postId) : '';
+      const known = postId && postMeta[postId] ? postMeta[postId] : null;
+      const postTitle = item.postTitle || (known && known.title) || '';
+      const postDate = item.postDate || (known && known.date) || '';
       const filename = extractFilename(
         item.url,
         item.name || '',
-        item.postTitle || '',
+        postTitle,
         result.length + 1
       );
       PatreonMedia.absorbInto(result, {
@@ -887,9 +903,9 @@
         filename: filename,
         width: item.width || 0,
         height: item.height || 0,
-        postId: item.postId ? String(item.postId) : '',
-        postTitle: item.postTitle ? String(item.postTitle) : '',
-        postDate: item.postDate ? String(item.postDate) : ''
+        postId: postId,
+        postTitle: postTitle,
+        postDate: postDate
       });
     }
 
@@ -936,7 +952,7 @@
 
     function fetchPostJson(postId) {
       return fetchJsonRetry(
-        `/api/posts/${postId}?include=media,images,attachments,attachments_media,post_file`,
+        `/api/posts/${postId}?include=media,images,attachments,attachments_media,post_file&json-api-use-default-includes=false`,
         'post ' + postId
       );
     }
@@ -964,6 +980,7 @@
           if (!json.data) json.data = {};
           if (!json.data.id) json.data.id = postId;
           const attributes = json.data.attributes || {};
+          notePostMeta(postId, attributes);
           const found = PatreonMedia.collectPostImages(json);
           const missing = PatreonMedia.mediaIdsToFetch(json, found);
           for (let m = 0; m < missing.length; m++) {
@@ -994,7 +1011,60 @@
     // Step 3: Photos remembered from cards that have since unmounted,
     // plus whatever is still on screen. A resized card image does not
     // replace the original the API already kept.
+    // On a single post, only that post's root. Other cards, comments,
+    // and recommendation rails stay out of this post's folder.
     // -------------------------------------------------------------
+    function nearestPostCard(el) {
+      if (!el || !el.closest) return null;
+      return el.closest('[data-tag="post-card"], [data-tag="post"], [data-testid="post-card"]');
+    }
+
+    function findCurrentPostRoot(postId) {
+      if (!postId || !/^\d+$/.test(String(postId)) || !document.querySelectorAll) return null;
+      const id = String(postId);
+      const marked = document.querySelectorAll('[data-post-id]');
+      for (let i = 0; i < marked.length; i++) {
+        if (marked[i].getAttribute('data-post-id') !== id) continue;
+        return nearestPostCard(marked[i]) || marked[i];
+      }
+      const cards = document.querySelectorAll('[data-tag="post-card"], [data-tag="post"], [data-testid="post-card"]');
+      for (let i = 0; i < cards.length; i++) {
+        if (cardPostId(cards[i]) === id) return cards[i];
+      }
+      return null;
+    }
+
+    function isCommentImage(el) {
+      if (!el || !el.closest) return false;
+      return !!el.closest('[data-tag="comment"], [data-tag="comments"], [data-tag="comment-row"], [data-tag="comment-avatar"], [data-tag="comments-section"]');
+    }
+
+    function domImageScope(img, url, root) {
+      const card = nearestPostCard(img);
+      const cardId = card ? cardPostId(card) : '';
+      let inOther = false;
+      let inCurrent = false;
+      if (isSinglePostPage) {
+        if (card && cardId && cardId !== singlePostId) inOther = true;
+        if (root && card && card !== root && root.contains && root.contains(card) && cardId && cardId !== singlePostId) {
+          inOther = true;
+        }
+        if (!inOther && card && cardId === singlePostId) inCurrent = true;
+        if (!inOther && root && root.contains && (img === root || root.contains(img))) {
+          if (!(card && card !== root && root.contains(card))) inCurrent = true;
+        }
+      }
+      return PatreonMedia.scopeDomImage({
+        pagePostId: isSinglePostPage ? singlePostId : '',
+        cardPostId: cardId,
+        url: url,
+        inCurrentPost: inCurrent,
+        inOtherPost: inOther,
+        inRecommendation: isUnwantedLink(img),
+        inComment: isCommentImage(img)
+      });
+    }
+
     if (globalThis.PatreonMedia) {
       const seenCount = seenCardImages && seenCardImages.items ? seenCardImages.items.length : 0;
       if (result.length === 0) {
@@ -1005,15 +1075,22 @@
       if (seenCardImages && seenCardImages.items) {
         for (let i = 0; i < seenCardImages.items.length; i++) {
           const seen = seenCardImages.items[i];
-          pushCollected({ url: seen.url, postId: seen.postId });
+          const scopedId = PatreonMedia.scopeDomImage({
+            pagePostId: isSinglePostPage ? singlePostId : '',
+            cardPostId: seen.postId || '',
+            url: seen.url,
+            inCurrentPost: false,
+            inOtherPost: !!(isSinglePostPage && seen.postId && String(seen.postId) !== String(singlePostId)),
+            inRecommendation: false,
+            inComment: false
+          });
+          if (!scopedId) continue;
+          pushCollected({ url: seen.url, postId: scopedId });
         }
       }
+      const currentPostRoot = isSinglePostPage ? findCurrentPostRoot(singlePostId) : null;
       const imgElements = document.querySelectorAll('img');
       imgElements.forEach((img) => {
-        if (isUnwantedLink(img)) return;
-        const card = img.closest('[data-tag="post-card"]');
-        const postId = card ? cardPostId(card) : '';
-        if (isSinglePostPage && postId && postId !== singlePostId) return;
         const urls = PatreonMedia.urlsFromImageFields({
           currentSrc: img.currentSrc,
           src: img.getAttribute('src') || '',
@@ -1024,7 +1101,9 @@
         });
         for (let u = 0; u < urls.length; u++) {
           if (!PatreonMedia.isPostImageUrl(urls[u])) continue;
-          pushCollected({ url: urls[u], postId: postId });
+          const scopedId = domImageScope(img, urls[u], currentPostRoot);
+          if (!scopedId) continue;
+          pushCollected({ url: urls[u], postId: scopedId });
         }
       });
     }

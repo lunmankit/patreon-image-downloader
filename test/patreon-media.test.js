@@ -42,7 +42,7 @@ assert.strictEqual(list.length, 3);
 
 const imagePost = Media.collectPostImages({
   data: {
-    id: '167604834',
+    id: '163709981',
     attributes: {
       title: 'Art card',
       published_at: '2026-01-02T00:00:00.000Z',
@@ -80,7 +80,7 @@ const imagePost = Media.collectPostImages({
 });
 assert.strictEqual(imagePost.length, 1);
 assert.strictEqual(imagePost[0].url, original);
-assert.strictEqual(imagePost[0].postId, '167604834');
+assert.strictEqual(imagePost[0].postId, '163709981');
 assert.strictEqual(imagePost[0].width, 3840);
 assert.strictEqual(imagePost[0].height, 2160);
 assert.strictEqual(imagePost[0].name, 'card.png');
@@ -126,7 +126,7 @@ assert.ok(videoPost.every((image) => image.url.indexOf('.m3u8') === -1));
 
 const inlineOnly = Media.collectPostImages({
   data: {
-    id: '99',
+    id: '163709981',
     attributes: {
       title: 'Inline',
       published_at: '2026-03-03T00:00:00.000Z',
@@ -148,7 +148,7 @@ const inlineOnly = Media.collectPostImages({
 });
 assert.strictEqual(inlineOnly.length, 1);
 assert.strictEqual(inlineOnly[0].url, original);
-assert.strictEqual(inlineOnly[0].postId, '99');
+assert.strictEqual(inlineOnly[0].postId, '163709981');
 assert.strictEqual(inlineOnly[0].width, 4000);
 assert.strictEqual(inlineOnly[0].height, 3000);
 assert.ok(Media.passesMinSize(inlineOnly[0], 400));
@@ -249,5 +249,202 @@ const popup = fs.readFileSync(path.join(root, 'popup.js'), 'utf8');
 assert.ok(popup.includes('PatreonMedia.passesMinSize'));
 const popupHtml = fs.readFileSync(path.join(root, 'popup.html'), 'utf8');
 assert.ok(popupHtml.includes('patreon-media.js'));
+
+function postCdn(postId, hash, segment, file) {
+  return 'https://c10.patreonusercontent.com/4/patreon-media/p/post/' + postId + '/'
+    + hash + '/' + segment + '/' + (file || '1.jpg') + '?token-time=1';
+}
+const openPost = '701';
+const neighborPost = '702';
+const openOriginal = postCdn(openPost, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'eyJxIjoxMDAsIndlYnAiOjB9');
+const neighborOriginal = postCdn(neighborPost, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'eyJxIjoxMDAsIndlYnAiOjB9');
+const neighborThumb = postCdn(neighborPost, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'eyJ3Ijo2MjB9');
+const looseFile = 'https://www.patreon.com/file?h=701&i=9';
+const scopedPost = Media.collectPostImages({
+  data: {
+    id: openPost,
+    attributes: {
+      title: 'Wanna play hide & seek in our Satin Catsuit ??',
+      published_at: '2026-11-11T12:00:00.000Z',
+      content_json_string: JSON.stringify({
+        type: 'doc',
+        content: [
+          { type: 'image', attrs: { media_id: '11', src: openOriginal, media_width: 1200, media_height: 1800 } },
+          { type: 'image', attrs: { media_id: '22', src: neighborOriginal, media_width: 1200, media_height: 1800 } }
+        ]
+      }),
+      content: '<p>note</p><img src="' + neighborThumb + '"><img src="https://c10.patreonusercontent.com/4/patreon-media/p/user/5/cccccccccccccccccccccccccccccccc/eyJ3IjoxMDB9/1.jpg">',
+      image: {
+        url: postCdn(neighborPost, 'dddddddddddddddddddddddddddddddd', 'eyJ3Ijo2MjB9'),
+        large_url: postCdn(neighborPost, 'dddddddddddddddddddddddddddddddd', 'eyJ3IjoxMDgwfQ==')
+      }
+    },
+    relationships: {
+      media: { data: [{ id: '11', type: 'media' }] },
+      images: { data: [{ id: '11', type: 'media' }] }
+    }
+  },
+  included: [
+    {
+      type: 'media',
+      id: '11',
+      attributes: {
+        mimetype: 'image/jpeg',
+        file_name: 'catsuit-01.jpg',
+        owner_type: 'post',
+        owner_id: openPost,
+        image_urls: { original: openOriginal }
+      }
+    },
+    {
+      type: 'media',
+      id: '22',
+      attributes: {
+        mimetype: 'image/jpeg',
+        file_name: 'Chun & Mirin Patreon-Set 2-03.jpg',
+        owner_type: 'post',
+        owner_id: neighborPost,
+        image_urls: { original: neighborOriginal, default: neighborThumb }
+      }
+    },
+    {
+      type: 'media',
+      id: '33',
+      attributes: {
+        mimetype: 'image/jpeg',
+        file_name: 'Chun & Mirin Patreon-Set 2-04.jpg',
+        owner_type: 'post',
+        owner_id: neighborPost,
+        download_url: looseFile
+      }
+    },
+    {
+      type: 'media',
+      id: '44',
+      attributes: {
+        mimetype: 'image/jpeg',
+        file_name: 'avatar.jpg',
+        owner_type: 'user',
+        owner_id: '5',
+        image_urls: {
+          original: 'https://c10.patreonusercontent.com/4/patreon-media/p/user/5/cccccccccccccccccccccccccccccccc/eyJ3IjoxMDB9/1.jpg'
+        }
+      }
+    },
+    {
+      type: 'media',
+      id: '55',
+      attributes: {
+        mimetype: 'image/jpeg',
+        file_name: 'Chun & Mirin Patreon-Set 2-05.jpg',
+        download_url: 'https://www.patreon.com/file?h=55&i=5'
+      }
+    }
+  ]
+});
+assert.strictEqual(scopedPost.length, 1);
+assert.strictEqual(scopedPost[0].name, 'catsuit-01.jpg');
+assert.strictEqual(scopedPost[0].postId, openPost);
+assert.strictEqual(scopedPost[0].postTitle, 'Wanna play hide & seek in our Satin Catsuit ??');
+assert.ok(scopedPost.every((image) => image.name.indexOf('Chun & Mirin') === -1));
+assert.ok(scopedPost.every((image) => image.url.indexOf('/p/post/' + neighborPost + '/') === -1));
+
+const neighborOnly = Media.collectPostImages({
+  data: {
+    id: neighborPost,
+    attributes: {
+      title: 'Chun & Mirin Set 2',
+      published_at: '2026-11-10T00:00:00.000Z'
+    },
+    relationships: {
+      images: { data: [{ id: '22', type: 'media' }] }
+    }
+  },
+  included: [
+    {
+      type: 'media',
+      id: '22',
+      attributes: {
+        mimetype: 'image/jpeg',
+        file_name: 'Chun & Mirin Patreon-Set 2-03.jpg',
+        owner_type: 'post',
+        owner_id: neighborPost,
+        image_urls: { original: neighborOriginal }
+      }
+    }
+  ]
+});
+assert.strictEqual(neighborOnly.length, 1);
+assert.strictEqual(neighborOnly[0].postId, neighborPost);
+assert.strictEqual(neighborOnly[0].postTitle, 'Chun & Mirin Set 2');
+assert.notStrictEqual(neighborOnly[0].postId, scopedPost[0].postId);
+
+const cardThumbUrl = postCdn(openPost, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'eyJ3Ijo2MjB9');
+const otherCardThumb = neighborThumb;
+assert.strictEqual(Media.scopeDomImage({
+  pagePostId: openPost,
+  cardPostId: openPost,
+  url: openOriginal,
+  inCurrentPost: true
+}), openPost);
+assert.strictEqual(Media.scopeDomImage({
+  pagePostId: openPost,
+  cardPostId: neighborPost,
+  url: otherCardThumb,
+  inOtherPost: true
+}), '');
+assert.strictEqual(Media.scopeDomImage({
+  pagePostId: openPost,
+  cardPostId: '',
+  url: otherCardThumb
+}), '');
+assert.strictEqual(Media.scopeDomImage({
+  pagePostId: openPost,
+  cardPostId: '',
+  url: cardThumbUrl
+}), openPost);
+assert.strictEqual(Media.scopeDomImage({
+  pagePostId: openPost,
+  cardPostId: openPost,
+  url: 'https://www.patreon.com/file?h=1&i=2',
+  inComment: true
+}), '');
+assert.strictEqual(Media.scopeDomImage({
+  pagePostId: openPost,
+  cardPostId: '',
+  url: 'https://pbs.twimg.com/media/loose.jpg',
+  inRecommendation: true
+}), '');
+assert.strictEqual(Media.scopeDomImage({
+  pagePostId: openPost,
+  cardPostId: '',
+  url: 'https://www.patreon.com/file?h=9&i=9'
+}), '');
+assert.strictEqual(Media.scopeDomImage({
+  pagePostId: '',
+  cardPostId: openPost,
+  url: openOriginal
+}), openPost);
+assert.strictEqual(Media.scopeDomImage({
+  pagePostId: '',
+  cardPostId: neighborPost,
+  url: neighborOriginal
+}), neighborPost);
+assert.strictEqual(Media.scopeDomImage({
+  pagePostId: '',
+  cardPostId: openPost,
+  url: neighborOriginal
+}), '');
+assert.strictEqual(Media.scopeDomImage({
+  pagePostId: '',
+  cardPostId: '',
+  url: neighborThumb
+}), '');
+
+const contentJs = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
+assert.ok(contentJs.includes('PatreonMedia.scopeDomImage'));
+assert.ok(contentJs.includes('json-api-use-default-includes=false'));
+assert.ok(contentJs.includes('findCurrentPostRoot'));
+assert.ok(contentJs.includes('if (!isSinglePostPage && storageData && storageData.autoLoad)'));
 
 console.log('patreon media tests passed');
