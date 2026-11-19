@@ -7,6 +7,11 @@
 // SERVER_FORBIDDEN, an expired signed URL, and similar) have to be observed
 // separately. The status text keeps the raw reason code so a later failure
 // is diagnosable, and it never includes the media URL.
+//
+// A path Chrome or Firefox rejects (INVALID_FILENAME) is not a dead end:
+// the relative path is sanitized per segment first, and one failure is
+// tried again under a different safe path. The media URL is not refreshed
+// for that error, and the same bad path is not repeated.
 (function (root) {
   const MAX_ATTEMPTS = 3;
   const DEFAULT_CONCURRENCY = 3;
@@ -114,7 +119,7 @@
         break;
       }
     }
-    if (!code && /INVALID\s+FILENAME|非法檔名/.test(upper)) code = 'INVALID_FILENAME';
+    if (!code && /INVALID\s+FILENAME|非法檔名|ILLEGAL CHARACTERS/.test(upper)) code = 'INVALID_FILENAME';
     if (!code && /INVALID\s+URL/.test(upper)) code = 'NETWORK_INVALID_REQUEST';
     if (!code && /\b403\b|FORBIDDEN/.test(upper)) code = 'SERVER_FORBIDDEN';
     if (!code && /\b401\b|UNAUTHORIZED/.test(upper)) code = 'SERVER_UNAUTHORIZED';
@@ -215,12 +220,56 @@
     return failureSummary(failed);
   }
 
+  function sanitizeDownloadPath(value) {
+    const api = root.DownloadPath;
+    if (api && typeof api.sanitizeRelativePath === 'function') return api.sanitizeRelativePath(value);
+    const text = String(value == null ? '' : value).replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, '').replace(/^\/+/, '');
+    const parts = text.split('/').filter(function (part) {
+      return part && part !== '.' && part !== '..';
+    });
+    return parts.join('/') || 'image.jpg';
+  }
+
+  function alternateSafePath(item, current) {
+    const api = root.DownloadPath;
+    const leafRaw = (item && item.filename) || String(current || '').split('/').pop() || 'image.jpg';
+    const leaf = api && typeof api.cleanFilename === 'function' ? api.cleanFilename(leafRaw) : String(leafRaw || 'image.jpg');
+    const first = String(current || '').split('/')[0] || 'Downloads';
+    const rootName = api && typeof api.sanitizeFolderName === 'function' ? api.sanitizeFolderName(first) : first;
+    const postRaw = item && item.postId ? String(item.postId) : '';
+    const postSeg = postRaw && api && typeof api.sanitizeFolderName === 'function'
+      ? api.sanitizeFolderName(postRaw)
+      : postRaw;
+    let next = postSeg && postSeg !== 'untitled'
+      ? rootName + '/' + postSeg + '/' + leaf
+      : rootName + '/' + leaf;
+    next = sanitizeDownloadPath(next);
+    if (next === current) {
+      const dot = leaf.lastIndexOf('.');
+      const alt = dot > 0 ? leaf.slice(0, dot) + '_' + leaf.slice(dot) : leaf + '_';
+      next = sanitizeDownloadPath(rootName + '/' + alt);
+    }
+    return next;
+  }
+
   async function runOne(item, options) {
     const opts = options || {};
     const maxAttempts = Math.max(1, Number(opts.maxAttempts) || MAX_ATTEMPTS);
     let url = String(item && item.url || '');
+    let saveAs = sanitizeDownloadPath((item && (item.path || item.filename)) || '');
+    let filenameRetried = false;
     const tried = [];
     let lastInfo = classifyDownloadError('下載沒有開始');
+
+    function adoptSafeFilename() {
+      if (filenameRetried || !lastInfo || lastInfo.code !== 'INVALID_FILENAME') return false;
+      filenameRetried = true;
+      const next = alternateSafePath(item, saveAs);
+      if (!next || next === saveAs) return false;
+      saveAs = next;
+      if (typeof opts.noteRetry === 'function') opts.noteRetry();
+      return true;
+    }
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       if (!isHttpUrl(url)) {
@@ -230,7 +279,7 @@
         try {
           started = await opts.download({
             url: url,
-            filename: (item && (item.path || item.filename)) || ''
+            filename: saveAs
           });
         } catch (e) {
           started = { ok: false, error: (e && e.message) || String(e) };
@@ -238,6 +287,10 @@
         if (tried.indexOf(url) === -1) tried.push(url);
         if (!started || !started.ok) {
           lastInfo = classifyDownloadError((started && started.error) || '下載沒有開始');
+          if (adoptSafeFilename()) {
+            attempt -= 1;
+            continue;
+          }
         } else {
           let finished = null;
           try {
@@ -252,6 +305,13 @@
           lastInfo = classifyDownloadError(
             badBody ? 'SERVER_BAD_CONTENT' : ((finished && finished.error) || 'interrupted')
           );
+          if (!badBody && adoptSafeFilename()) {
+            if (started.id && typeof opts.discard === 'function') {
+              try { await opts.discard(started.id); } catch (e) {}
+            }
+            attempt -= 1;
+            continue;
+          }
           const recoveryNow = planRecovery(lastInfo, attempt + 1, item, maxAttempts);
           const giveUp = recoveryNow.action === 'fail';
           if (started.id && typeof opts.discard === 'function' && (!giveUp || badBody)) {

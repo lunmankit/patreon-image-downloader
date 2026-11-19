@@ -18,11 +18,19 @@
 // (the whole name, or the first PRESERVE_FILENAME_CHARS of it, whichever is
 // shorter). Auto mode shortens the folder instead of refusing the download.
 // Before a scan, the check uses TYPICAL_FILENAME as a stand-in.
+//
+// chrome.downloads (and Firefox downloads) reject the whole relative path
+// when any segment is not a portable name: control or format characters, a
+// leading or trailing "~", an 8.3 name containing "~", a reserved device
+// name, a shell extension (.local, .lnk, .scf, .url, {CLSID}), a leading
+// separator, or "..". Ordinary characters such as "&" are kept.
 (function (root) {
   const MAX_RELATIVE_PATH = 200;
   const PRESERVE_FILENAME_CHARS = 80;
   const TYPICAL_FILENAME = 'typical-download-image-name-0001.jpg';
-  const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+  const RESERVED = /^(con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3]|conin\$|conout\$|clock\$)$/i;
+  const MAGIC_NAMES = /^(desktop\.ini|thumbs\.db)$/i;
+  const SHELL_EXT = /^(local|lnk|scf|url)$/i;
 
   function todayStamp(date) {
     const d = date instanceof Date && !isNaN(date.getTime()) ? date : new Date();
@@ -32,25 +40,73 @@
     return y + m + day;
   }
 
-  function cleanSegment(name) {
-    let text = String(name == null ? '' : name);
-    text = text.replace(/[\u0000-\u001f]/g, '');
+  function isNonCharacter(codePoint) {
+    if (codePoint >= 0xFDD0 && codePoint <= 0xFDEF) return true;
+    return (codePoint & 0xFFFE) === 0xFFFE;
+  }
+
+  function dropUnsafeCodePoints(text) {
+    let out = '';
+    for (const ch of text) {
+      const codePoint = ch.codePointAt(0);
+      if (isNonCharacter(codePoint)) continue;
+      if (codePoint >= 0xD800 && codePoint <= 0xDFFF) continue;
+      if (/^\p{Cc}$/u.test(ch) || /^\p{Cf}$/u.test(ch)) continue;
+      out += ch;
+    }
+    return out;
+  }
+
+  function prepareText(name) {
+    let text = dropUnsafeCodePoints(String(name == null ? '' : name));
     text = text.replace(/[\\/:*?"<>|]/g, '_');
     text = text.replace(/\s+/g, ' ').trim();
-    text = text.replace(/^[. ]+/, '').replace(/[. ]+$/, '');
     return text;
+  }
+
+  function couldBeInvalidShortName(name) {
+    const text = String(name || '');
+    if (text.length > 12 || text.indexOf('~') === -1) return false;
+    if (/[\s"\\/\[\]:+|<>=;?,*]/.test(text)) return false;
+    const dot = text.indexOf('.');
+    if (dot === -1) return text.length <= 8;
+    if (text.lastIndexOf('.') !== dot) return false;
+    const extLen = text.length - dot - 1;
+    return dot > 0 && dot <= 8 && extLen <= 3;
+  }
+
+  function neutralizeShortTilde(name) {
+    if (!couldBeInvalidShortName(name)) return name;
+    return String(name).replace(/~/g, '_');
+  }
+
+  function cleanSegment(name) {
+    let text = prepareText(name);
+    text = text.replace(/^[.~ ]+/, '').replace(/[.~ ]+$/, '');
+    return neutralizeShortTilde(text);
   }
 
   function guardReserved(segment) {
     const stem = String(segment).replace(/\..*$/, '');
-    if (RESERVED.test(segment) || RESERVED.test(stem)) return '_' + segment;
+    if (RESERVED.test(segment) || RESERVED.test(stem) || MAGIC_NAMES.test(segment)) {
+      return '_' + segment;
+    }
     return segment;
+  }
+
+  function guardShellExtension(segment) {
+    const text = String(segment || '');
+    const dot = text.lastIndexOf('.');
+    if (dot <= 0 || dot === text.length - 1) return text;
+    const ext = text.slice(dot + 1);
+    if (SHELL_EXT.test(ext) || /^\{.+\}$/.test(ext)) return text + '_';
+    return text;
   }
 
   function sanitizeFolderName(name) {
     const cleaned = cleanSegment(name);
     if (!cleaned) return 'untitled';
-    return guardReserved(cleaned);
+    return guardShellExtension(guardReserved(cleaned));
   }
 
   function truncateSegment(name, maxLen) {
@@ -58,12 +114,12 @@
     let text = cleanSegment(name);
     if (!text) text = 'untitled';
     if (text.length > limit) {
-      text = text.slice(0, limit).replace(/[. ]+$/g, '');
+      text = text.slice(0, limit).replace(/[.~ ]+$/g, '');
     }
     if (!text) text = 'untitled'.slice(0, limit);
-    text = guardReserved(text);
+    text = guardShellExtension(guardReserved(neutralizeShortTilde(text)));
     if (text.length > limit) {
-      text = text.slice(0, limit).replace(/[. ]+$/g, '') || 'u';
+      text = text.slice(0, limit).replace(/[.~ ]+$/g, '') || 'u';
     }
     return text || 'u';
   }
@@ -76,24 +132,23 @@
     if ((head + extra).length <= limit) return sanitizeFolderName(head + extra);
     const room = limit - extra.length;
     if (room < 1) return truncateSegment(extra, limit);
-    const shortened = truncateSegment(head, room).replace(/[. ]+$/g, '');
+    const shortened = truncateSegment(head, room).replace(/[.~ ]+$/g, '');
     let combined = (shortened || 'u') + extra;
-    if (combined.length > limit) combined = combined.slice(0, limit).replace(/[. ]+$/g, '');
-    return combined || 'u';
+    if (combined.length > limit) combined = combined.slice(0, limit).replace(/[.~ ]+$/g, '');
+    return guardShellExtension(combined) || 'u';
   }
 
   function cleanFilename(filename) {
-    let name = String(filename == null ? '' : filename);
-    name = name.replace(/[\u0000-\u001f]/g, '');
-    name = name.replace(/[\\/:*?"<>|]/g, '_');
-    name = name.replace(/\s+/g, ' ').trim().replace(/[. ]+$/g, '');
+    let name = prepareText(filename).replace(/[.~ ]+$/g, '');
     if (!name) name = 'image.jpg';
     const match = name.match(/^(.*?)(\.[A-Za-z0-9]{1,8})$/);
-    let base = match ? match[1].replace(/[. ]+$/g, '') : name;
+    let base = match ? match[1] : name;
     const ext = match ? match[2] : '';
+    base = base.replace(/^[.~ ]+/, '').replace(/[.~ ]+$/g, '');
     if (!base) base = 'image';
-    if (RESERVED.test(base)) base = '_' + base;
-    return base + ext;
+    let out = neutralizeShortTilde(base + ext);
+    out = guardShellExtension(guardReserved(out));
+    return out || 'image.jpg';
   }
 
   function fitFilename(filename, maxLen) {
@@ -105,13 +160,13 @@
     let base = match ? match[1] : cleaned;
     const room = limit - ext.length;
     if (room < 1) return truncateSegment(cleaned, limit);
-    base = base.slice(0, room).replace(/[. ]+$/g, '');
+    base = base.slice(0, room).replace(/[.~ ]+$/g, '');
     if (!base) base = 'f';
-    if (RESERVED.test(base)) {
-      base = ('_' + base).slice(0, Math.max(1, room)).replace(/[. ]+$/g, '') || 'f';
+    if (RESERVED.test(base) || MAGIC_NAMES.test(base)) {
+      base = ('_' + base).slice(0, Math.max(1, room)).replace(/[.~ ]+$/g, '') || 'f';
     }
-    let out = base + ext;
-    if (out.length > limit) out = out.slice(0, limit).replace(/[. ]+$/g, '');
+    let out = guardShellExtension(guardReserved(neutralizeShortTilde(base + ext)));
+    if (out.length > limit) out = out.slice(0, limit).replace(/[.~ ]+$/g, '');
     return out || 'f';
   }
 
@@ -149,6 +204,30 @@
   function joinPath(root, folder, filename) {
     if (!folder) return root + '/' + filename;
     return root + '/' + folder + '/' + filename;
+  }
+
+  function sanitizeRelativePath(input) {
+    let text = String(input == null ? '' : input);
+    text = text.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, '');
+    text = text.replace(/^\/+/, '');
+    const parts = text.split('/');
+    const safe = [];
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (!part || part === '.' || part === '..') continue;
+      const last = i === parts.length - 1;
+      safe.push(last ? cleanFilename(part) : sanitizeFolderName(part));
+    }
+    if (!safe.length) return 'image.jpg';
+    let rel = safe.join('/');
+    if (rel.length > MAX_RELATIVE_PATH) {
+      const leaf = safe.pop();
+      const head = safe.join('/');
+      const room = MAX_RELATIVE_PATH - (head ? head.length + 1 : 0);
+      const fitted = fitFilename(leaf, Math.max(1, room));
+      rel = head ? head + '/' + fitted : fitted;
+    }
+    return rel;
   }
 
   function blankPlan(mode, root, preview) {
@@ -251,7 +330,7 @@
             rel = joinPath(root, folder, filename);
             fileTruncated = true;
           }
-          paths[item.index] = rel;
+          paths[item.index] = sanitizeRelativePath(rel);
           folders[item.index] = folder;
         });
       });
@@ -312,7 +391,7 @@
         filename = fitFilename(filename, maxFile);
         fileTruncated = true;
       }
-      paths[index] = root + '/' + filename;
+      paths[index] = sanitizeRelativePath(root + '/' + filename);
       folders[index] = '';
     });
     const warnings = fileTruncated ? ['部分檔名過長，已縮短檔名以便儲存。'] : [];
@@ -456,6 +535,7 @@
     todayStamp: todayStamp,
     cleanSegment: cleanSegment,
     sanitizeFolderName: sanitizeFolderName,
+    sanitizeRelativePath: sanitizeRelativePath,
     truncateSegment: truncateSegment,
     cleanFilename: cleanFilename,
     fitFilename: fitFilename,

@@ -7,6 +7,7 @@ const root = path.join(__dirname, '..');
 const sandbox = { URL, console };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(root, 'download-path.js'), 'utf8'), sandbox);
 vm.runInContext(fs.readFileSync(path.join(root, 'download-batch.js'), 'utf8'), sandbox);
 const Batch = sandbox.DownloadBatch;
 
@@ -52,6 +53,9 @@ assert.strictEqual(invalidName.code, 'INVALID_FILENAME');
 assert.strictEqual(invalidName.retryable, false);
 assert.strictEqual(invalidName.refresh, false);
 assert.strictEqual(invalidName.label, '檔名無法使用');
+const firefoxIllegal = Batch.classifyDownloadError('filename must not contain illegal characters');
+assert.strictEqual(firefoxIllegal.code, 'INVALID_FILENAME');
+assert.strictEqual(firefoxIllegal.retryable, false);
 
 const network = Batch.classifyDownloadError('NETWORK_FAILED');
 assert.strictEqual(network.retryable, true);
@@ -157,7 +161,83 @@ async function testFantiaRetriesWithoutRefresh() {
   assert.strictEqual(result.text, '所有圖片已成功下載！');
 }
 
-async function testInvalidFilenameIsNotRetried() {
+async function testUnsafePathIsSavedWithoutRefresh() {
+  const seen = [];
+  let refreshes = 0;
+  const result = await run([
+    item({
+      filename: 'Chun Refill Patreon Sets-18.jpg',
+      path: 'Patreon_Downloads/20261118_Our Cute Sparkle~/Chun Refill Patreon Sets-18.jpg'
+    }),
+    item({
+      filename: 'DSC00534.jpg',
+      path: 'Fantia_Downloads/20261118_Sparkle\u200b~/DSC00534.jpg',
+      url: 'https://c.fantia.jp/uploads/a.jpg',
+      canRefresh: false,
+      postId: '9',
+      mediaId: ''
+    }),
+    item({
+      filename: 'a~1.jpg',
+      path: '/Gallery_Downloads/../a~1.jpg',
+      url: 'https://cdn.example/a.jpg',
+      canRefresh: false,
+      postId: '',
+      mediaId: ''
+    })
+  ], {
+    concurrency: 1,
+    download: async ({ filename }) => {
+      seen.push(filename);
+      if (/~|\u200b|^\//.test(filename) || filename.split('/').some((part) => part === '..')) {
+        return { ok: false, error: 'Invalid filename' };
+      }
+      return { ok: true, id: seen.length };
+    },
+    refreshUrl: async () => {
+      refreshes += 1;
+      return 'https://cdn.example/should-not-refresh.jpg';
+    }
+  });
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.text, '所有圖片已成功下載！');
+  assert.strictEqual(refreshes, 0);
+  assert.strictEqual(seen.length, 3);
+  assert.strictEqual(seen[0], 'Patreon_Downloads/20261118_Our Cute Sparkle/Chun Refill Patreon Sets-18.jpg');
+  assert.strictEqual(seen[1], 'Fantia_Downloads/20261118_Sparkle/DSC00534.jpg');
+  assert.strictEqual(seen[2], 'Gallery_Downloads/a_1.jpg');
+  assert.ok(result.text.indexOf('token') === -1);
+}
+
+async function testInvalidFilenameRetriesWithSafePath() {
+  const seen = [];
+  let refreshes = 0;
+  const result = await run([item({
+    filename: 'Chun Refill Patreon Sets-19.jpg',
+    path: 'Patreon_Downloads/20261118_Our Cute Sparkle~/Chun Refill Patreon Sets-19.jpg'
+  })], {
+    maxAttempts: 1,
+    download: async ({ filename }) => {
+      seen.push(filename);
+      if (seen.length === 1) return { ok: false, error: 'Invalid filename' };
+      return { ok: true, id: 9 };
+    },
+    refreshUrl: async () => {
+      refreshes += 1;
+      return 'https://cdn.example/other.jpg?token-hash=supersecret';
+    }
+  });
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(refreshes, 0);
+  assert.strictEqual(seen.length, 2);
+  assert.notStrictEqual(seen[0], seen[1]);
+  assert.strictEqual(seen[0], 'Patreon_Downloads/20261118_Our Cute Sparkle/Chun Refill Patreon Sets-19.jpg');
+  assert.strictEqual(seen[1], 'Patreon_Downloads/174139933/Chun Refill Patreon Sets-19.jpg');
+  assert.strictEqual(result.text, '所有圖片已成功下載！');
+  assert.ok(result.text.indexOf('supersecret') === -1);
+}
+
+async function testInvalidFilenameStillReported() {
   let downloads = 0;
   let refreshes = 0;
   const result = await run([item({ filename: 'bad.jpg' })], {
@@ -167,12 +247,14 @@ async function testInvalidFilenameIsNotRetried() {
     },
     refreshUrl: async () => {
       refreshes += 1;
-      return 'https://cdn.example/other.jpg';
+      return 'https://cdn.example/other.jpg?token-hash=supersecret';
     }
   });
-  assert.strictEqual(downloads, 1);
+  assert.strictEqual(downloads, 2);
   assert.strictEqual(refreshes, 0);
   assert.ok(result.text.indexOf('bad.jpg：檔名無法使用（INVALID_FILENAME）') !== -1);
+  assert.ok(result.text.indexOf('supersecret') === -1);
+  assert.ok(result.text.indexOf('https://') === -1);
 }
 
 async function testHtmlBodyIsRetried() {
@@ -261,6 +343,7 @@ const popupJs = fs.readFileSync(path.join(root, 'popup.js'), 'utf8');
 const popupHtml = fs.readFileSync(path.join(root, 'popup.html'), 'utf8');
 const stage = fs.readFileSync(path.join(root, 'scripts/stage-firefox.py'), 'utf8');
 assert.ok(popupHtml.includes('download-batch.js'));
+assert.ok(popupHtml.indexOf('download-path.js') < popupHtml.indexOf('download-batch.js'));
 assert.ok(popupJs.includes('batch.runDownloadBatch(items'));
 assert.ok(popupJs.includes("typeof batch.runDownloadBatch !== 'function'"));
 assert.ok(popupJs.includes('chrome.downloads.onChanged'));
@@ -275,7 +358,9 @@ assert.ok(!Batch.isNonImageBody(''));
 testSuccessAfterRefresh()
   .then(testFourFailuresReportDetail)
   .then(testFantiaRetriesWithoutRefresh)
-  .then(testInvalidFilenameIsNotRetried)
+  .then(testUnsafePathIsSavedWithoutRefresh)
+  .then(testInvalidFilenameRetriesWithSafePath)
+  .then(testInvalidFilenameStillReported)
   .then(testHtmlBodyIsRetried)
   .then(testConcurrency)
   .then(testProgressStaysQuietOnSuccess)
