@@ -36,6 +36,18 @@ assert.strictEqual(list.length, 1);
 assert.strictEqual(list[0].url, original);
 assert.strictEqual(list[0].width, 6720);
 
+const keptId = [];
+Media.absorbInto(keptId, { url: tinyThumb, filename: 'thumb.jpg', mediaId: '725534910', postId: '163709981' });
+Media.absorbInto(keptId, { url: original, filename: 'full.jpg', postId: '163709981' });
+assert.strictEqual(keptId.length, 1);
+assert.strictEqual(keptId[0].url, original);
+assert.strictEqual(keptId[0].mediaId, '725534910');
+const filledId = [];
+Media.absorbInto(filledId, { url: original, filename: 'full.jpg', postId: '163709981' });
+Media.absorbInto(filledId, { url: tinyThumb, mediaId: '42', postId: '163709981' });
+assert.strictEqual(filledId[0].url, original);
+assert.strictEqual(filledId[0].mediaId, '42');
+
 Media.absorbInto(list, { url: 'https://www.patreon.com/file?h=10&i=1', filename: 'a.jpg', postId: '10' });
 Media.absorbInto(list, { url: 'https://www.patreon.com/file?h=10&i=2', filename: 'b.jpg', postId: '10' });
 assert.strictEqual(list.length, 3);
@@ -446,5 +458,127 @@ assert.ok(contentJs.includes('PatreonMedia.scopeDomImage'));
 assert.ok(contentJs.includes('json-api-use-default-includes=false'));
 assert.ok(contentJs.includes('findCurrentPostRoot'));
 assert.ok(contentJs.includes('if (!isSinglePostPage && storageData && storageData.autoLoad)'));
+assert.ok(contentJs.includes('mediaId: item.mediaId'));
 
-console.log('patreon media tests passed');
+async function testRefresh() {
+  const oldOpen = postCdn(openPost, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'eyJxIjoxMDAsIndlYnAiOjB9');
+  const newOpen = oldOpen.replace('token-time=1', 'token-time=2');
+  const fileUrl = 'https://www.patreon.com/file?h=174139933&m=11';
+  const postJson = {
+    data: {
+      id: openPost,
+      attributes: { title: 'our cute sparkle', published_at: '2026-11-01T00:00:00.000Z' },
+      relationships: { media: { data: [{ id: '11', type: 'media' }] } }
+    },
+    included: [
+      {
+        type: 'media',
+        id: '11',
+        attributes: {
+          mimetype: 'image/jpeg',
+          file_name: 'sparkle-01.jpg',
+          owner_type: 'post',
+          owner_id: openPost,
+          image_urls: { original: newOpen }
+        }
+      },
+      {
+        type: 'media',
+        id: '22',
+        attributes: {
+          mimetype: 'image/jpeg',
+          file_name: 'other-post.jpg',
+          owner_type: 'post',
+          owner_id: neighborPost,
+          image_urls: { original: neighborOriginal }
+        }
+      }
+    ]
+  };
+  assert.strictEqual(Media.retryDownloadUrl({
+    post: postJson,
+    failedUrl: oldOpen,
+    mediaId: '11'
+  }), newOpen);
+  assert.strictEqual(Media.retryDownloadUrl({
+    post: postJson,
+    failedUrl: neighborOriginal,
+    mediaId: '22'
+  }), '');
+  assert.ok(newOpen.indexOf('/p/post/' + neighborPost + '/') === -1);
+
+  assert.strictEqual(Media.retryDownloadUrl({
+    media: {
+      data: {
+        attributes: {
+          mimetype: 'image/jpeg',
+          image_urls: { original: newOpen },
+          download_url: fileUrl
+        }
+      }
+    },
+    failedUrl: oldOpen,
+    mediaId: '11'
+  }), newOpen);
+  assert.strictEqual(Media.retryDownloadUrl({
+    media: {
+      data: {
+        attributes: {
+          mimetype: 'image/jpeg',
+          image_urls: { original: oldOpen },
+          download_url: fileUrl
+        }
+      }
+    },
+    failedUrl: oldOpen,
+    skipUrls: [oldOpen]
+  }), fileUrl);
+
+  const calls = [];
+  const urls = await Media.refreshDownloadUrls([
+    { mediaId: '11', postId: '174139933', url: oldOpen, skipUrls: [oldOpen] },
+    { mediaId: '11', postId: '174139933', url: oldOpen, skipUrls: [oldOpen] }
+  ], async (path) => {
+    calls.push(path);
+    assert.ok(path.indexOf('token') === -1, path);
+    if (path.indexOf('/api/media/') === 0) {
+      return {
+        data: {
+          attributes: {
+            mimetype: 'image/jpeg',
+            image_urls: { original: newOpen },
+            download_url: fileUrl
+          }
+        }
+      };
+    }
+    assert.strictEqual(
+      path,
+      '/api/posts/174139933?include=media,images,attachments,attachments_media,post_file&json-api-use-default-includes=false'
+    );
+    return null;
+  });
+  assert.strictEqual(urls.length, 2);
+  assert.strictEqual(urls[0], newOpen);
+  assert.strictEqual(urls[1], newOpen);
+  assert.strictEqual(calls.filter((path) => path.indexOf('/api/posts/') === 0).length, 1);
+  assert.strictEqual(calls.filter((path) => path.indexOf('/api/media/') === 0).length, 1);
+
+  const badCalls = [];
+  const bad = await Media.refreshDownloadUrls([
+    { mediaId: '11/../2', postId: '174139933?include=campaign', url: oldOpen + '&token-hash=supersecret' }
+  ], async (path) => {
+    badCalls.push(path);
+    return null;
+  });
+  assert.strictEqual(badCalls.length, 0);
+  assert.strictEqual(bad.length, 1);
+  assert.strictEqual(bad[0], '');
+}
+
+testRefresh().then(() => {
+  console.log('patreon media tests passed');
+}).catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

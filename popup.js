@@ -8,6 +8,8 @@ let folderPrefsReady = false;
 let scanNotice = '';
 let pendingPageUrls = [];
 let currentPageUrl = '';
+let currentTabId = 0;
+let refreshInjected = null;
 
 function pageKind(url) {
   if (!url) return '';
@@ -106,6 +108,7 @@ function restoreGenericScan(pageUrl) {
 chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
   const tab = tabs && tabs[0];
   if (!tab) return;
+  noteActiveTab(tab);
   currentPageUrl = tab.url || '';
   const kind = pageKind(tab.url);
   if (kind) downloadFolder = folderForKind(kind);
@@ -290,6 +293,7 @@ scanBtn.addEventListener('click', async () => {
       throw new Error("請先開啟 Patreon、Fantia，或含縮圖的圖庫頁面再執行掃瞄。");
     }
     downloadFolder = folderForKind(kind);
+    noteActiveTab(tab);
     currentPageUrl = tab.url || '';
     scanNotice = '';
     pendingPageUrls = [];
@@ -412,6 +416,178 @@ probeBtn.addEventListener('click', async () => {
   probeBtn.disabled = false;
 });
 
+function noteActiveTab(tab) {
+  const nextId = tab && tab.id ? tab.id : 0;
+  if (nextId !== currentTabId) refreshInjected = null;
+  currentTabId = nextId;
+}
+
+// Runs in the Patreon tab, after patreon-media.js is injected. Numeric post
+// and media ids are the only values turned into API paths. Signed query
+// parameters stay on the download URL and are not written into the popup.
+function pageRefreshDownloadUrls(requests) {
+  const media = globalThis.PatreonMedia;
+  if (!media || typeof media.refreshDownloadUrls !== 'function') {
+    return Promise.resolve((requests || []).map(() => ''));
+  }
+  const rootCache = globalThis.__patreonUrlRefreshCache || (globalThis.__patreonUrlRefreshCache = {});
+  function fetchJson(path) {
+    if (Object.prototype.hasOwnProperty.call(rootCache, path) && rootCache[path]) {
+      return Promise.resolve(rootCache[path]);
+    }
+    return fetch(path, {
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/vnd.api+json' }
+    }).then((res) => {
+      if (!res.ok) return null;
+      return res.json();
+    }).then((json) => {
+      if (json) rootCache[path] = json;
+      return json || null;
+    }).catch(() => null);
+  }
+  return media.refreshDownloadUrls(requests, fetchJson);
+}
+
+function startChromeDownload(request) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+    try {
+      const returned = chrome.downloads.download({
+        url: request.url,
+        filename: request.filename,
+        conflictAction: 'uniquify'
+      }, (downloadId) => {
+        const err = chrome.runtime.lastError;
+        if (err) finish({ ok: false, error: err.message || String(err) });
+        else if (downloadId == null) finish({ ok: false, error: '下載沒有開始' });
+        else finish({ ok: true, id: downloadId });
+      });
+      // Chrome calls the callback and may also return a promise. Firefox can
+      // settle the promise when the callback does not run. The first result wins.
+      if (returned && typeof returned.then === 'function') {
+        returned.then((downloadId) => {
+          if (downloadId == null) finish({ ok: false, error: '下載沒有開始' });
+          else finish({ ok: true, id: downloadId });
+        }, (err) => {
+          finish({ ok: false, error: (err && err.message) || String(err) });
+        });
+      }
+    } catch (e) {
+      finish({ ok: false, error: (e && e.message) || String(e) });
+    }
+  });
+}
+
+function waitForChromeDownload(id) {
+  return new Promise((resolve) => {
+    if (id == null) {
+      resolve({ ok: false, error: '下載沒有開始' });
+      return;
+    }
+    let settled = false;
+    let timer = null;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      try { chrome.downloads.onChanged.removeListener(onChanged); } catch (e) {}
+      resolve(result);
+    };
+    const lookUp = (fallbackError) => {
+      try {
+        chrome.downloads.search({ id: id }, (items) => {
+          void chrome.runtime.lastError;
+          const item = items && items[0];
+          if (!item) {
+            if (fallbackError) finish({ ok: false, error: fallbackError });
+            return;
+          }
+          if (item.state === 'complete') finish({ ok: true, mime: item.mime || '' });
+          else if (item.state === 'interrupted') finish({ ok: false, error: item.error || fallbackError || 'interrupted' });
+          else if (fallbackError) finish({ ok: false, error: fallbackError });
+        });
+      } catch (e) {
+        if (fallbackError) finish({ ok: false, error: fallbackError });
+      }
+    };
+    const onChanged = (delta) => {
+      if (!delta || delta.id !== id) return;
+      const state = delta.state && delta.state.current;
+      if (delta.error && delta.error.current && state !== 'complete') {
+        finish({ ok: false, error: String(delta.error.current) });
+        return;
+      }
+      if (state === 'complete' || state === 'interrupted') lookUp(state === 'interrupted' ? 'interrupted' : '');
+    };
+    try { chrome.downloads.onChanged.addListener(onChanged); } catch (e) {}
+    timer = setTimeout(() => lookUp('NETWORK_TIMEOUT'), 120000);
+    lookUp('');
+  });
+}
+
+function discardChromeDownload(id) {
+  return new Promise((resolve) => {
+    if (id == null || !chrome.downloads) {
+      resolve();
+      return;
+    }
+    try {
+      chrome.downloads.cancel(id, () => {
+        void chrome.runtime.lastError;
+        try {
+          chrome.downloads.erase({ id: id }, () => {
+            void chrome.runtime.lastError;
+            resolve();
+          });
+        } catch (e) {
+          resolve();
+        }
+      });
+    } catch (e) {
+      resolve();
+    }
+  });
+}
+
+async function refreshPatreonItem(item) {
+  if (!item || !item.canRefresh || !currentTabId) return '';
+  if (pageKind(currentPageUrl) !== 'patreon') return '';
+  try {
+    if (!refreshInjected) {
+      const tabId = currentTabId;
+      refreshInjected = chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        files: ['patreon-media.js']
+      }).catch((err) => {
+        if (currentTabId === tabId) refreshInjected = null;
+        throw err;
+      });
+    }
+    await refreshInjected;
+    const injected = await chrome.scripting.executeScript({
+      target: { tabId: currentTabId },
+      func: pageRefreshDownloadUrls,
+      args: [[{
+        mediaId: item.mediaId || '',
+        postId: item.postId || '',
+        url: item.url || '',
+        skipUrls: Array.isArray(item.skipUrls) ? item.skipUrls.slice(0, 8) : []
+      }]]
+    });
+    const row = injected && injected[0] && injected[0].result;
+    const fresh = Array.isArray(row) ? row[0] : '';
+    return typeof fresh === 'string' ? fresh : '';
+  } catch (e) {
+    return '';
+  }
+}
+
 downloadBtn.addEventListener('click', () => {
   if (filteredImages.length === 0 || downloadBusy) return;
 
@@ -422,32 +598,46 @@ downloadBtn.addEventListener('click', () => {
     return;
   }
 
+  const batch = globalThis.DownloadBatch;
+  if (!batch || typeof batch.runDownloadBatch !== 'function') {
+    statusEl.innerText = '下載元件未載入，請重新載入擴充功能後再試。';
+    return;
+  }
+
+  const kind = pageKind(currentPageUrl);
+  const items = filteredImages.map((img, index) => ({
+    url: img.url,
+    filename: img.filename,
+    path: plan.paths[index],
+    mediaId: img.mediaId ? String(img.mediaId) : '',
+    postId: img.postId ? String(img.postId) : '',
+    canRefresh: kind === 'patreon' && !!(img.mediaId || img.postId)
+  }));
+
   downloadBusy = true;
   downloadBtn.disabled = true;
-  let downloadedCount = 0;
-  let failedCount = 0;
-
-  filteredImages.forEach((img, index) => {
-    chrome.downloads.download({
-      url: img.url,
-      filename: plan.paths[index],
-      conflictAction: 'uniquify'
-    }, () => {
-      downloadedCount++;
-      if (chrome.runtime.lastError) failedCount++;
-      statusEl.innerText = `下載進度：${downloadedCount} / ${filteredImages.length}`;
-      if (downloadedCount === filteredImages.length) {
-        downloadBusy = false;
-        if (failedCount) {
-          statusEl.innerText = `下載結束，有 ${failedCount} 個檔案失敗。`;
-        } else {
-          statusEl.innerText = '所有圖片已成功下載！';
-        }
-        updateFolderUi();
-        try {
-          chrome.runtime.sendMessage({ type: 'DOWNLOAD_COMPLETE' });
-        } catch (e) {}
-      }
-    });
+  statusEl.innerText = `下載進度：0 / ${items.length}`;
+  batch.runDownloadBatch(items, {
+    concurrency: batch.DEFAULT_CONCURRENCY,
+    download: startChromeDownload,
+    wait: waitForChromeDownload,
+    discard: discardChromeDownload,
+    refreshUrl: refreshPatreonItem,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    onProgress: (progress) => {
+      if (progress && progress.text) statusEl.innerText = progress.text;
+    }
+  }).then((result) => {
+    downloadBusy = false;
+    statusEl.innerText = result && result.text ? result.text : '所有圖片已成功下載！';
+    updateFolderUi();
+    try {
+      chrome.runtime.sendMessage({ type: 'DOWNLOAD_COMPLETE' });
+    } catch (e) {}
+  }).catch((err) => {
+    downloadBusy = false;
+    const message = err && err.message ? err.message : '未知錯誤';
+    statusEl.innerText = '下載失敗：' + message;
+    updateFolderUi();
   });
 });
