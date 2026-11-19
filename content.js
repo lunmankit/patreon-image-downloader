@@ -905,7 +905,8 @@
         height: item.height || 0,
         postId: postId,
         postTitle: postTitle,
-        postDate: postDate
+        postDate: postDate,
+        mediaId: item.mediaId ? String(item.mediaId) : ''
       });
     }
 

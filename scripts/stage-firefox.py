@@ -19,6 +19,7 @@ OUT = ROOT / "dist" / "firefox"
 FILES = (
     "background.js",
     "content.js",
+    "download-batch.js",
     "download-path.js",
     "fantia.js",
     "feed-autoload.js",

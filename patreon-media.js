@@ -212,6 +212,16 @@
     return box;
   }
 
+  function fillMissing(target, source) {
+    if (!target || !source) return;
+    if (!target.mediaId && source.mediaId) target.mediaId = source.mediaId;
+    if (!target.filename && source.filename) target.filename = source.filename;
+    if (!target.name && source.name) target.name = source.name;
+    if (!target.postId && source.postId) target.postId = source.postId;
+    if (!target.postTitle && source.postTitle) target.postTitle = source.postTitle;
+    if (!target.postDate && source.postDate) target.postDate = source.postDate;
+  }
+
   function absorbInto(list, record) {
     if (!list || !record || !record.url) return list;
     const key = dedupeKey(record.url);
@@ -219,11 +229,10 @@
     for (let i = 0; i < list.length; i++) {
       if (dedupeKey(list[i].url) !== key) continue;
       if (renditionRank(record.url) > renditionRank(list[i].url)) {
-        if (!record.filename && list[i].filename) record.filename = list[i].filename;
-        if (!record.postId && list[i].postId) record.postId = list[i].postId;
-        if (!record.postTitle && list[i].postTitle) record.postTitle = list[i].postTitle;
-        if (!record.postDate && list[i].postDate) record.postDate = list[i].postDate;
+        fillMissing(record, list[i]);
         list[i] = record;
+      } else {
+        fillMissing(list[i], record);
       }
       return list;
     }
@@ -528,6 +537,113 @@
     return out;
   }
 
+  function safeNumericId(value) {
+    const id = String(value == null ? '' : value).trim();
+    return /^\d+$/.test(id) ? id : '';
+  }
+
+  function pushCandidate(list, seen, attrs, url) {
+    if (!url || seen[url]) return;
+    if (isSkippableUrl(url)) return;
+    if (attrs) {
+      if (!isDownloadableImage(attrs, url)) return;
+    } else if (!isPostImageUrl(url) && !imageExtension(url) && !/\/file(?:\?|$)/i.test(url)) {
+      return;
+    }
+    seen[url] = true;
+    list.push(url);
+  }
+
+  function matchRefreshedImage(images, failedUrl, mediaId) {
+    const list = images || [];
+    const id = safeNumericId(mediaId);
+    if (id) {
+      for (let i = 0; i < list.length; i++) {
+        if (list[i] && String(list[i].mediaId) === id) return list[i];
+      }
+    }
+    const key = dedupeKey(failedUrl);
+    if (!key) return null;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] && dedupeKey(list[i].url) === key) return list[i];
+    }
+    return null;
+  }
+
+  // A failed chrome.downloads attempt often still has a live file behind a
+  // new signed CDN query, or behind the Patreon /file endpoint. Prefer a URL
+  // we have not already tried. Never substitute a different post's file.
+  function retryDownloadUrl(input) {
+    const source = input || {};
+    const skip = {};
+    if (source.failedUrl) skip[String(source.failedUrl)] = true;
+    const skipList = Array.isArray(source.skipUrls) ? source.skipUrls : [];
+    for (let i = 0; i < skipList.length; i++) {
+      if (skipList[i]) skip[String(skipList[i])] = true;
+    }
+    const candidates = [];
+    const seen = {};
+    const mediaResource = source.media && (source.media.data || source.media);
+    const mediaAttrs = mediaResource && mediaResource.attributes ? mediaResource.attributes : null;
+    if (mediaAttrs) {
+      pushCandidate(candidates, seen, mediaAttrs, chooseImageUrl(mediaAttrs));
+      pushCandidate(candidates, seen, mediaAttrs, mediaAttrs.download_url);
+      const urls = mediaAttrs.image_urls || {};
+      pushCandidate(candidates, seen, mediaAttrs, urls.original);
+    }
+    if (source.post) {
+      const matched = matchRefreshedImage(
+        collectPostImages(source.post),
+        source.failedUrl,
+        source.mediaId
+      );
+      if (matched) pushCandidate(candidates, seen, null, matched.url);
+    }
+    for (let i = 0; i < candidates.length; i++) {
+      if (!skip[candidates[i]]) return candidates[i];
+    }
+    return '';
+  }
+
+  function postApiPath(postId) {
+    return '/api/posts/' + postId
+      + '?include=media,images,attachments,attachments_media,post_file&json-api-use-default-includes=false';
+  }
+
+  async function refreshDownloadUrls(requests, fetchJson) {
+    const list = Array.isArray(requests) ? requests : [];
+    const cache = {};
+    async function read(path) {
+      if (Object.prototype.hasOwnProperty.call(cache, path)) return cache[path];
+      let json = null;
+      try {
+        json = await fetchJson(path);
+      } catch (e) {
+        json = null;
+      }
+      cache[path] = json || null;
+      return cache[path];
+    }
+    const out = [];
+    for (let i = 0; i < list.length; i++) {
+      const req = list[i] || {};
+      const mediaId = safeNumericId(req.mediaId);
+      const postId = safeNumericId(req.postId);
+      let media = null;
+      let post = null;
+      if (mediaId) media = await read('/api/media/' + mediaId);
+      if (postId) post = await read(postApiPath(postId));
+      out.push(retryDownloadUrl({
+        media: media,
+        post: post,
+        failedUrl: req.url || '',
+        mediaId: mediaId,
+        skipUrls: req.skipUrls
+      }) || '');
+    }
+    return out;
+  }
+
   root.PatreonMedia = {
     resizeParams: resizeParams,
     renditionRank: renditionRank,
@@ -545,6 +661,8 @@
     passesMinSize: passesMinSize,
     resolveDimensions: resolveDimensions,
     urlsFromImageFields: urlsFromImageFields,
-    mediaIdsToFetch: mediaIdsToFetch
+    mediaIdsToFetch: mediaIdsToFetch,
+    retryDownloadUrl: retryDownloadUrl,
+    refreshDownloadUrls: refreshDownloadUrls
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
