@@ -1,8 +1,8 @@
 # Patreon & Fantia Image Batch Downloader
 
-Manifest V3 extension (v1.12) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts, from Fantia posts the current browser session can already see, and from other gallery pages whose thumbnails point at an original photo.
+Manifest V3 extension (v1.13) for Chrome and desktop Firefox. It batch-extracts and downloads high-resolution images from Patreon posts, from Fantia posts the current browser session can already see, and from other gallery pages whose thumbnails point at an original photo.
 
-A download is finished only after the browser reports that the file was saved. Transient network and server errors are retried. On Patreon, a failure that looks like an expired or rejected media link is refreshed from that post's own media and tried again. When every file succeeds, the popup only says so. When some still fail, it lists each filename and the error.
+A download is finished only after the browser reports that the file was saved. Transient network and server errors are retried. On Patreon, a failure that looks like an expired or rejected media link is refreshed from that post's own media and tried again. When every file succeeds, the popup only says so. When some still fail, it lists each filename, a Traditional Chinese reason, and the browser error code. The message does not include the media URL.
 
 On a supported page, open the popup and scan. The extension collects images (preferring original / download URLs), shows a preview, and can filter by minimum width or height. Optional auto-load scrolls Patreon feeds, and on Fantia it follows listing pagination, before the scan. A single Patreon post page queues only that post's images, even when auto-load is checked. On a creator feed, each image stays with the post it came from. Patreon downloads are saved under `Patreon_Downloads/`. Fantia downloads are saved under `Fantia_Downloads/`.
 
@@ -17,6 +17,8 @@ The popup field **下載資料夾** chooses where the batch goes. The choice and
 Windows still limits the full path to about 260 characters (`MAX_PATH`), and `chrome.downloads` does not opt into long paths. This extension treats a relative path longer than **200 characters** as too long to save, leaving about 59 characters for the drive and the Downloads directory. The check runs while you edit a custom name and again when a date-plus-title folder is computed. Before a scan it estimates with a typical filename; after a scan it uses the real filenames.
 
 Auto mode shortens an over-long title and shows the shortened folder before download. A custom name that does not fit is not shortened silently: the popup warns **資料夾路徑超過 200 字元，無法儲存**, download stays disabled, and **改用縮短名稱** fills in a name that fits. Filenames that are still too long after the folder fits are shortened, with a separate warning, on both Patreon and Fantia.
+
+Each segment of the relative path is also made safe for `chrome.downloads` and Firefox before the save. Control and format characters are removed, a leading or trailing `~` is removed, an 8.3-style name that contains `~` is rewritten, reserved device names are prefixed, and shell extensions (`.local`, `.lnk`, `.scf`, `.url`) gain a trailing `_`. A leading slash, a drive prefix, and `..` are dropped so the file stays under the download root. Ampersands and other ordinary letters stay, so `Chun & Refill` and `Our Cute Sparkle` remain recognizable. Patreon, Fantia, and generic gallery downloads share this path. If the browser still reports an unusable filename, that file is tried once more under a safe folder and the same leaf name. The media link is not swapped for a different post.
 
 The popup UI is in Traditional Chinese.
 

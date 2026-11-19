@@ -25,7 +25,9 @@ function assertSafe(rel, label) {
   assert.ok(!rel.split('/').some((part) => part === '' || part === '.' || part === '..'), label);
   rel.split('/').forEach((part) => {
     assert.ok(!ILLEGAL.test(part), label + ' ' + part);
-    assert.ok(!/[. ]$/.test(part), label + ' trailing ' + part);
+    assert.ok(!/[.~ ]$/.test(part), label + ' trailing ' + part);
+    assert.ok(!/\.(local|lnk|scf|url)$/i.test(part), label + ' shell ' + part);
+    assert.ok(!/\p{Cf}/u.test(part), label + ' format ' + part);
     const stem = part.replace(/\..*$/, '');
     assert.ok(!RESERVED.test(part) && !RESERVED.test(stem), label + ' reserved ' + part);
   });
@@ -240,6 +242,74 @@ assert.ok(!flatLong.paths[0].includes('untitled'));
 
 assert.strictEqual(DownloadPath.cleanFilename('CON.jpg'), '_CON.jpg');
 assert.strictEqual(DownloadPath.sanitizeFolderName('aux'), '_aux');
+assert.strictEqual(DownloadPath.cleanFilename('a~1.jpg'), 'a_1.jpg');
+assert.strictEqual(DownloadPath.cleanFilename('file~name.jpg'), 'file~name.jpg');
+assert.strictEqual(DownloadPath.cleanFilename('notes.url'), 'notes.url_');
+assert.strictEqual(DownloadPath.sanitizeFolderName('desktop.ini'), '_desktop.ini');
+
+const sparkleNames = [
+  'Chun Refill Patreon Sets-18.jpg',
+  'Chun Refill Patreon Sets-19.jpg',
+  'DSC00534.jpg',
+  'DSC00535.jpg'
+];
+const sparkle = plan(sparkleNames.map((filename) => ({
+  filename: filename,
+  postId: '174139933',
+  postTitle: 'Our Cute Sparkle~',
+  postDate: '2026-11-18'
+})), { root: 'Patreon_Downloads', mode: 'auto' });
+assert.strictEqual(sparkle.ok, true);
+sparkle.paths.forEach((rel, index) => {
+  assertSafe(rel, 'sparkle');
+  assert.ok(rel.startsWith('Patreon_Downloads/20261118_Our Cute Sparkle/'), rel);
+  assert.ok(rel.endsWith('/' + sparkleNames[index]), rel);
+  assert.ok(!rel.includes('~'), rel);
+});
+
+const ampersand = plan([{
+  filename: 'DSC00534.jpg',
+  postId: '174139933',
+  postTitle: 'Chun & Refill\u200b',
+  postDate: '2026-11-18'
+}], { root: 'Patreon_Downloads', mode: 'auto' });
+assert.strictEqual(
+  ampersand.paths[0],
+  'Patreon_Downloads/20261118_Chun & Refill/DSC00534.jpg'
+);
+assertSafe(ampersand.paths[0], 'ampersand');
+
+const fantiaTilde = plan([{
+  filename: 'DSC00535.jpg',
+  postId: '9',
+  postTitle: 'Sparkle~',
+  postDate: '2026-11-18'
+}], { root: 'Fantia_Downloads', mode: 'auto' });
+assert.strictEqual(fantiaTilde.paths[0], 'Fantia_Downloads/20261118_Sparkle/DSC00535.jpg');
+assertSafe(fantiaTilde.paths[0], 'fantia-tilde');
+
+const galleryShort = plan([{ filename: 'a~1.jpg' }], { root: 'Gallery_Downloads', mode: 'off' });
+assert.deepStrictEqual(galleryShort.paths, ['Gallery_Downloads/a_1.jpg']);
+assertSafe(galleryShort.paths[0], 'gallery-short');
+
+const shellFolder = plan([{
+  filename: 'a.jpg',
+  postId: '1',
+  postTitle: 'notes.url',
+  postDate: '20261118'
+}], { root: 'Patreon_Downloads', mode: 'auto' });
+assert.ok(shellFolder.paths[0].includes('notes.url_'), shellFolder.paths[0]);
+assert.ok(!/\.url\//.test(shellFolder.paths[0]), shellFolder.paths[0]);
+assertSafe(shellFolder.paths[0], 'shell-folder');
+
+assert.strictEqual(
+  DownloadPath.sanitizeRelativePath('\\Patreon_Downloads\\..\\20261118_Sparkle~\\Chun Refill Patreon Sets-18.jpg'),
+  'Patreon_Downloads/20261118_Sparkle/Chun Refill Patreon Sets-18.jpg'
+);
+assert.strictEqual(
+  DownloadPath.sanitizeRelativePath('/Patreon_Downloads/Chun Refill Patreon Sets-19.jpg'),
+  'Patreon_Downloads/Chun Refill Patreon Sets-19.jpg'
+);
 assert.strictEqual(DownloadPath.resolveDate('2026-10-26T00:00:00+09:00', TODAY).yyyymmdd, '20261026');
 assert.strictEqual(DownloadPath.resolveDate('20261340', TODAY).source, 'today');
 
